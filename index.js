@@ -144,11 +144,11 @@ app.post('/rates', (req, res) => {
           description:  'Fully installed including levelling and removal of laser film where applicable.',
         },
         {
-          service_name: `Uplifted Removal — ${group}`,
+          service_name: `Uplift/Removal — ${group}`,
           service_code: `UPLIFTED_${group}`,
           total_price:  toPence(groupRates.collection + UPLIFTED_EXTRA),
           currency:     'GBP',
-          description:  'We collect your old unit and deliver the new one.',
+          description:  'We will uplift/remove the existing like-for-like and dispose',
         },
       ];
  
