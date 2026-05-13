@@ -15,8 +15,10 @@ const RATES = {
   G5: { positioned: 312.54, installed: 410.61, collection: 213.10 },
 };
  
-const UPLIFTED_EXTRA       = 5.00;
+const UPLIFTED_EXTRA        = 5.00;
 const SPECIAL_DELIVERY_RATE = 70.00;
+const POSITIONED_EXTRA      = 3.00;
+const INSTALLED_EXTRA       = 3.00;
  
 // ─────────────────────────────────────────────────────────────
 // SKU → GROUP MAPPING
@@ -130,14 +132,14 @@ app.post('/rates', (req, res) => {
         {
           service_name: `Unpacked & Positioned — ${group}`,
           service_code: `POSITIONED_${group}`,
-          total_price:  toPence(groupRates.positioned),
+          total_price:  toPence(groupRates.positioned + POSITIONED_EXTRA),
           currency:     'GBP',
           description:  'Delivered, unpacked and positioned in your desired location.',
         },
         {
           service_name: `Unpacked, Positioned & Installed — ${group}`,
           service_code: `INSTALLED_${group}`,
-          total_price:  toPence(groupRates.installed),
+          total_price:  toPence(groupRates.installed + INSTALLED_EXTRA),
           currency:     'GBP',
           description:  'Fully installed including levelling and removal of laser film where applicable.',
         },
@@ -163,14 +165,14 @@ app.post('/rates', (req, res) => {
         {
           service_name: `Unpacked & Positioned — ${group}`,
           service_code: `POSITIONED_${group}`,
-          total_price:  toPence(groupRates.positioned),
+          total_price:  toPence(groupRates.positioned + POSITIONED_EXTRA),
           currency:     'GBP',
           description:  'Delivered, unpacked and positioned in your desired location.',
         },
         {
           service_name: `Unpacked, Positioned & Installed — ${group}`,
           service_code: `INSTALLED_${group}`,
-          total_price:  toPence(groupRates.installed),
+          total_price:  toPence(groupRates.installed + INSTALLED_EXTRA),
           currency:     'GBP',
           description:  'Fully installed including levelling and removal of laser film where applicable.',
         },
