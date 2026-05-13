@@ -151,8 +151,15 @@ app.post('/rates', (req, res) => {
       ];
  
     } else {
-      // ── STANDARD UK POSTCODES — 3 options ───────────────────
+      // ── STANDARD UK POSTCODES — 4 options (Delivery Only FREE + preselected) ──
       rates = [
+        {
+          service_name: 'Delivery Only',
+          service_code: `DELIVERY_FREE_${group}`,
+          total_price:  0,
+          currency:     'GBP',
+          description:  'Delivered into premises. Unit remains on pallet/packaging.',
+        },
         {
           service_name: `Unpacked & Positioned — ${group}`,
           service_code: `POSITIONED_${group}`,
@@ -189,3 +196,4 @@ app.get('/', (req, res) => res.send('Koolmax Shipping Service — OK'));
  
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Koolmax shipping service running on port ${PORT}`));
+// PH8-10 fix already in ranges above
