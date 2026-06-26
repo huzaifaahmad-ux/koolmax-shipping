@@ -1,30 +1,30 @@
-const express    = require('express');
+const express = require('express');
 const bodyParser = require('body-parser');
-const https      = require('https');
-const app        = express();
+const app = express();
 
 app.use(bodyParser.json());
 
-const COMBISTEEL_URL     = 'https://pim.combisteel.com/pimcore-graphql-webservices/Combisteel';
-const COMBISTEEL_API_KEY = process.env.COMBISTEEL_API_KEY || 'feed23626ace249b399514a2fc4396187b27';
-const SHOPIFY_STORE      = process.env.SHOPIFY_STORE_URL    || '';
-const SHOPIFY_TOKEN      = process.env.SHOPIFY_ACCESS_TOKEN || '';
-const SHOPIFY_VERSION    = process.env.SHOPIFY_API_VERSION  || '2025-01';
-const SHOPIFY_LOCATION   = process.env.SHOPIFY_LOCATION_ID  || '';
-
+// ─────────────────────────────────────────────────────────────
+// HADFIELDS BASE RATES (ex-VAT, £) — per unit
+// ─────────────────────────────────────────────────────────────
 const RATES = {
-  G1: { positioned: 63.94,  installed: 91.05,  collection: 30.45  },
-  G2: { positioned: 82.52,  installed: 106.53, collection: 35.51  },
-  G3: { positioned: 125.01, installed: 184.48, collection: 56.84  },
-  G4: { positioned: 170.47, installed: 243.98, collection: 74.59  },
-  G5: { positioned: 312.54, installed: 410.61, collection: 213.10 },
+  G1: { positioned: 63.94,  collection: 30.45  },
+  G2: { positioned: 82.52,  collection: 35.51  },
+  G3: { positioned: 125.01, collection: 56.84  },
+  G4: { positioned: 170.47, collection: 74.59  },
+  G5: { positioned: 312.54, collection: 213.10 },
 };
 
-const UPLIFTED_EXTRA        = 5.00;
-const SPECIAL_DELIVERY_RATE = 70.00;
-const POSITIONED_EXTRA      = 3.00;
-const INSTALLED_EXTRA       = 3.00;
+// ─────────────────────────────────────────────────────────────
+// EXTRAS (per unit)
+// ─────────────────────────────────────────────────────────────
+const POSITIONED_EXTRA          = 13.00; // £3 original + £10 new
+const UPLIFTED_EXTRA            = 15.00; // £5 original + £10 new
+const SPECIAL_DELIVERY_PER_ITEM = 70.00; // £70 per product on special postcodes
 
+// ─────────────────────────────────────────────────────────────
+// SKU → GROUP MAPPING
+// ─────────────────────────────────────────────────────────────
 const SKU_GROUP = {
   // G1
   'KMC200G':'G1','KMF200G':'G1','KMF200':'G1','KMC200':'G1','KMC200S':'G1',
@@ -84,222 +84,160 @@ const SKU_GROUP = {
   '7455.2525':'G5','7455.2535':'G5','7072.0115':'G5',
 };
 
+// ─────────────────────────────────────────────────────────────
+// SPECIAL POSTCODE RANGES
+// ─────────────────────────────────────────────────────────────
 const SPECIAL_RANGES = {
-  'AB':[[1,99]],'HS':[[1,99]],'KA':[[1,99]],
-  'KW':[[1,99]],'PA':[[1,99]],'ZE':[[1,99]],
-  'IV':[[1,3],[4,36],[63,63],[99,99]],
-  'PH':[[8,10],[15,18],[19,41],[49,50]],
+  'AB': [[1, 99]],
+  'HS': [[1, 99]],
+  'IV': [[1, 99]],
+  'KA': [[1, 99]],
+  'KW': [[1, 99]],
+  'PA': [[1, 99]],
+  'PH': [[8, 10], [15, 18], [19, 41], [49, 50]],
+  'ZE': [[1, 99]],
 };
 
 function parsePostcode(p) {
-  if (!p) return { alpha:'', number:0 };
-  const outward = p.toUpperCase().trim().split(' ')[0];
-  const m = outward.match(/^([A-Z]{1,2})(\d+)/);
-  return m ? { alpha:m[1], number:parseInt(m[2],10) } : { alpha:'', number:0 };
+  const clean = (p || '').toUpperCase().replace(/\s+/g, '');
+  const m = clean.match(/^([A-Z]{1,2})(\d{1,2})/);
+  return m ? { alpha: m[1], number: parseInt(m[2]) } : { alpha: '', number: 0 };
 }
 
-function isSpecialPostcode(p) {
-  const { alpha, number } = parsePostcode(p);
+function isSpecial(postcode) {
+  const { alpha, number } = parsePostcode(postcode);
   if (!alpha || !SPECIAL_RANGES[alpha]) return false;
-  return SPECIAL_RANGES[alpha].some(([a,b]) => number>=a && number<=b);
+  return SPECIAL_RANGES[alpha].some(([a, b]) => number >= a && number <= b);
 }
 
-function getHighestGroup(items) {
-  const order = ['G1','G2','G3','G4','G5'];
-  let highest = 'G1';
+function toPence(pounds) {
+  return Math.round(pounds * 100);
+}
+
+// ─────────────────────────────────────────────────────────────
+// CALCULATE TOTALS
+// items = [{ sku, quantity }, ...]
+// Logic: per-unit price × quantity, summed across all items/groups
+// ─────────────────────────────────────────────────────────────
+function calculateTotals(items) {
+  let positionedTotal = 0;
+  let upliftedTotal   = 0;
+  let totalQty        = 0;
+
   for (const item of items) {
-    const sku = (item.sku||'').toUpperCase().trim();
-    const g   = SKU_GROUP[sku]||null;
-    if (g && order.indexOf(g) > order.indexOf(highest)) highest = g;
+    const sku = (item.sku || '').trim();
+    const qty = item.quantity || 1;
+    totalQty += qty;
+
+    const group = SKU_GROUP[sku];
+    if (!group || !RATES[group]) {
+      console.warn(`Unknown SKU: "${sku}" — defaulting to G3`);
+      const r = RATES['G3'];
+      positionedTotal += (r.positioned + POSITIONED_EXTRA) * qty;
+      upliftedTotal   += (r.collection + UPLIFTED_EXTRA)   * qty;
+      continue;
+    }
+
+    const r = RATES[group];
+    positionedTotal += (r.positioned + POSITIONED_EXTRA) * qty;
+    upliftedTotal   += (r.collection + UPLIFTED_EXTRA)   * qty;
   }
-  return highest;
+
+  return { positionedTotal, upliftedTotal, totalQty };
 }
 
-function toPence(pounds) { return Math.round(pounds*100); }
-
-// ── SHIPPING ENDPOINT ────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// /rates ENDPOINT
+// ─────────────────────────────────────────────────────────────
 app.post('/rates', (req, res) => {
   try {
-    const { rate } = req.body;
-    const { destination, items } = rate;
-    const postcode = destination.postal_code || '';
-    const country  = (destination.country||'').toUpperCase();
+    const { rate } = req.body || {};
+    const items       = (rate && rate.items) || [];
+    const destination = (rate && rate.destination) || {};
+    const postcode    = destination.postal_code || '';
 
-    if (country !== 'GB' && country !== 'UK') return res.json({ rates:[] });
+    const special = isSpecial(postcode);
+    const { positionedTotal, upliftedTotal, totalQty } = calculateTotals(items);
+    const combinedTotal = positionedTotal + upliftedTotal;
 
-    const group      = getHighestGroup(items);
-    const groupRates = RATES[group];
-    const special    = isSpecialPostcode(postcode);
+    let rates = [];
 
-    const deliveryOnly = special
-      ? { service_name:'Delivery Only', service_code:'DELIVERY_SPECIAL', total_price:toPence(SPECIAL_DELIVERY_RATE), currency:'GBP', description:'Delivered into premises. Unit remains on pallet/packaging.' }
-      : { service_name:'Delivery Only', service_code:`DELIVERY_FREE_${group}`, total_price:0, currency:'GBP', description:'Delivered into premises. Unit remains on pallet/packaging.' };
-
-    const rates = [
-      deliveryOnly,
-      { service_name:`Unpacked & Positioned — ${group}`, service_code:`POSITIONED_${group}`, total_price:toPence(groupRates.positioned+POSITIONED_EXTRA), currency:'GBP', description:'Delivered, unpacked and positioned in your desired location.' },
-      { service_name:`Unpacked, Positioned & Installed — ${group}`, service_code:`INSTALLED_${group}`, total_price:toPence(groupRates.installed+INSTALLED_EXTRA), currency:'GBP', description:'Fully installed including levelling and removal of laser film where applicable.' },
-      { service_name:`Uplifted Removal — ${group}`, service_code:`UPLIFTED_${group}`, total_price:toPence(groupRates.collection+UPLIFTED_EXTRA), currency:'GBP', description:'We collect your old unit and deliver the new one.' },
-    ];
+    if (special) {
+      // ── SPECIAL CODES — 4 options ─────────────────
+      rates = [
+        {
+          service_name: 'Delivery Only',
+          service_code: 'DELIVERY_SPECIAL',
+          total_price:  toPence(SPECIAL_DELIVERY_PER_ITEM * totalQty),
+          currency:     'GBP',
+          description:  'Delivered into premises. Unit remains on pallet. £70 per product.',
+        },
+        {
+          service_name: 'Unpacked & Positioned',
+          service_code: 'POSITIONED',
+          total_price:  toPence(positionedTotal),
+          currency:     'GBP',
+          description:  'Delivered, unpacked and positioned in your desired location.',
+        },
+        {
+          service_name: 'Uplift/Removal',
+          service_code: 'UPLIFTED',
+          total_price:  toPence(upliftedTotal),
+          currency:     'GBP',
+          description:  'We will uplift/remove the existing like-for-like and dispose.',
+        },
+        {
+          service_name: 'Unpacked & Positioned + Uplift/Removal',
+          service_code: 'POSITIONED_UPLIFTED',
+          total_price:  toPence(combinedTotal),
+          currency:     'GBP',
+          description:  'Delivered, unpacked, positioned, and We will uplift/remove the existing like-for-like and dispose.',
+        },
+      ];
+    } else {
+      // ── STANDARD UK — 4 options ───────────────────
+      rates = [
+        {
+          service_name: 'Delivery Only',
+          service_code: 'DELIVERY_FREE',
+          total_price:  0,
+          currency:     'GBP',
+          description:  'Delivered into premises. Unit remains on pallet.',
+        },
+        {
+          service_name: 'Unpacked & Positioned',
+          service_code: 'POSITIONED',
+          total_price:  toPence(positionedTotal),
+          currency:     'GBP',
+          description:  'Delivered, unpacked and positioned in your desired location.',
+        },
+        {
+          service_name: 'Uplift/Removal',
+          service_code: 'UPLIFTED',
+          total_price:  toPence(upliftedTotal),
+          currency:     'GBP',
+          description:  'We will uplift/remove the existing like-for-like and dispose.',
+        },
+        {
+          service_name: 'Unpacked & Positioned + Uplift/Removal',
+          service_code: 'POSITIONED_UPLIFTED',
+          total_price:  toPence(combinedTotal),
+          currency:     'GBP',
+          description:  'Delivered, unpacked, positioned, and We will uplift/remove the existing like-for-like and dispose.',
+        },
+      ];
+    }
 
     return res.json({ rates });
+
   } catch (err) {
-    console.error('Shipping error:', err);
-    return res.status(500).json({ error:'Internal server error' });
+    console.error('Shipping rate error:', err);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// ── GRAPHQL HELPER ───────────────────────────────────────────
-function graphqlRequest(url, query, headers) {
-  return new Promise((resolve, reject) => {
-    const body   = JSON.stringify({ query });
-    const parsed = new URL(url);
-    const opts   = {
-      hostname: parsed.hostname,
-      path:     parsed.pathname,
-      method:   'POST',
-      headers:  { ...headers, 'Content-Length': Buffer.byteLength(body) },
-    };
-    const req = https.request(opts, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); }
-        catch (e) { reject(new Error('Invalid JSON: ' + data.substring(0,200))); }
-      });
-    });
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
-}
+// Health check
+app.get('/', (req, res) => res.send('Koolmax Shipping Service — OK'));
 
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-// ── COMBISTEEL STOCK FETCH ───────────────────────────────────
-async function fetchCombisteelStock() {
-  const all      = [];
-  let after      = 0;
-  const pageSize = 1000;
-
-  console.log('[Combisteel] Fetching stock...');
-
-  while (true) {
-    const query = `{ getProductListing(first: ${pageSize}, after: ${after}) { totalCount edges { node { sku stock } } } }`;
-    const data  = await graphqlRequest(COMBISTEEL_URL, query, {
-      'Content-Type': 'application/json',
-      'X-API-Key':    COMBISTEEL_API_KEY,
-    });
-
-    const edges      = data.data.getProductListing.edges;
-    const totalCount = data.data.getProductListing.totalCount;
-
-    for (const edge of edges) {
-      if (edge.node.sku) {
-        all.push({ sku: edge.node.sku, quantity: parseInt(edge.node.stock, 10) || 0 });
-      }
-    }
-
-    console.log(`[Combisteel] ${all.length} / ${totalCount} fetched`);
-    if (all.length >= totalCount) break;
-    after += pageSize;
-  }
-
-  return all;
-}
-
-// ── SHOPIFY INVENTORY UPDATE ─────────────────────────────────
-async function getInventoryItemBySku(sku) {
-  const escapedSku = sku.replace(/"/g, '\\"');
-const query = `{ productVariants(first:1, query:"sku:\\"${escapedSku}\\"") { edges { node { inventoryItem { id } } } } }`;
-  const url   = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-
-  const data  = await graphqlRequest(url, query, {
-    'Content-Type':           'application/json',
-    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-  });
-
-  // Guard against missing or error response
-  if (!data || !data.data || !data.data.productVariants) {
-    console.warn(`[Shopify] No productVariants in response for SKU: ${sku}`);
-    return null;
-  }
-
-  const variants = data.data.productVariants.edges;
-  if (!variants || !variants.length) return null;
-
-  const inventoryItem = variants[0].node.inventoryItem;
-  if (!inventoryItem) return null;
-
-  return inventoryItem.id;
-}
-
-async function updateShopifyStock(inventoryItemId, quantity) {
-  const mutation = `mutation { inventorySetQuantities(input: { reason:"correction" name:"available" quantities:[{ inventoryItemId:"${inventoryItemId}" locationId:"${SHOPIFY_LOCATION}" quantity:${quantity} }] }) { userErrors { field message } } }`;
-  const url      = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-  const data     = await graphqlRequest(url, mutation, {
-    'Content-Type':           'application/json',
-    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-  });
-  const errors = data.data.inventorySetQuantities.userErrors;
-  if (errors.length) { console.error('[Shopify] Error:', errors); return false; }
-  return true;
-}
-
-// ── MAIN SYNC ────────────────────────────────────────────────
-async function runCombisteelStockSync() {
-  console.log(`\n[${new Date().toISOString()}] ── Combisteel Sync Start ──`);
-  let updated=0, skipped=0, errors=0;
-
-  try {
-    const products = await fetchCombisteelStock();
-
-    for (const product of products) {
-      try {
-        const invId = await getInventoryItemBySku(product.sku);
-if (!invId) {
-  console.log(`⏭ ${product.sku} → not found in Shopify`);
-  skipped++;
-  continue;
-}
-const ok = await updateShopifyStock(invId, product.quantity);
-if (ok) {
-  console.log(`✅ ${product.sku} → qty updated to ${product.quantity}`);
-  updated++;
-} else {
-  console.log(`❌ ${product.sku} → stock update failed`);
-  errors++;
-}
-await delay(300);
-      } catch (err) {
-        console.error(`❌ ${product.sku}:`, err.message);
-        errors++;
-      }
-    }
-
-    console.log(`[${new Date().toISOString()}] ── Sync Done: Updated:${updated} Skipped:${skipped} Errors:${errors} ──\n`);
-  } catch (err) {
-    console.error('[Sync] Fatal error (shipping unaffected):', err.message);
-  }
-}
-
-// ── MANUAL TRIGGER ───────────────────────────────────────────
-app.get('/sync-stock', async (req, res) => {
-  res.json({ message:'Stock sync started — check Railway logs' });
-  runCombisteelStockSync();
-});
-
-// ── HEALTH CHECK ─────────────────────────────────────────────
-app.get('/', (req, res) => res.send('Koolmax Shipping + Stock Sync — OK'));
-
-// ── START ────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Service running on port ${PORT}`);
-  // Run sync 30s after startup then every hour
-  setTimeout(() => {
-    runCombisteelStockSync();
-    setInterval(runCombisteelStockSync, 60 * 60 * 1000);
-  }, 30000);
-  console.log('[Scheduler] Stock sync every 1 hour');
-});
+app.listen(PORT, () => console.log(`Koolmax shipping service running on port ${PORT}`));
