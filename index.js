@@ -210,7 +210,8 @@ async function fetchCombisteelStock() {
 
 // ── SHOPIFY INVENTORY UPDATE ─────────────────────────────────
 async function getInventoryItemBySku(sku) {
-  const query = `{ productVariants(first:1, query:"sku:${sku}") { edges { node { inventoryItem { id } } } } }`;
+  const escapedSku = sku.replace(/"/g, '\\"');
+const query = `{ productVariants(first:1, query:"sku:\\"${escapedSku}\\"") { edges { node { inventoryItem { id } } } } }`;
   const url   = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
 
   const data  = await graphqlRequest(url, query, {
@@ -256,11 +257,20 @@ async function runCombisteelStockSync() {
     for (const product of products) {
       try {
         const invId = await getInventoryItemBySku(product.sku);
-        if (!invId) { skipped++; continue; }
-        const ok = await updateShopifyStock(invId, product.quantity);
-        if (ok) { console.log(`✅ ${product.sku} → ${product.quantity}`); updated++; }
-        else errors++;
-        await delay(200);
+if (!invId) {
+  console.log(`⏭ ${product.sku} → not found in Shopify`);
+  skipped++;
+  continue;
+}
+const ok = await updateShopifyStock(invId, product.quantity);
+if (ok) {
+  console.log(`✅ ${product.sku} → qty updated to ${product.quantity}`);
+  updated++;
+} else {
+  console.log(`❌ ${product.sku} → stock update failed`);
+  errors++;
+}
+await delay(300);
       } catch (err) {
         console.error(`❌ ${product.sku}:`, err.message);
         errors++;
