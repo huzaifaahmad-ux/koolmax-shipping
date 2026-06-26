@@ -212,12 +212,25 @@ async function fetchCombisteelStock() {
 async function getInventoryItemBySku(sku) {
   const query = `{ productVariants(first:1, query:"sku:${sku}") { edges { node { inventoryItem { id } } } } }`;
   const url   = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
+
   const data  = await graphqlRequest(url, query, {
     'Content-Type':           'application/json',
     'X-Shopify-Access-Token': SHOPIFY_TOKEN,
   });
+
+  // Guard against missing or error response
+  if (!data || !data.data || !data.data.productVariants) {
+    console.warn(`[Shopify] No productVariants in response for SKU: ${sku}`);
+    return null;
+  }
+
   const variants = data.data.productVariants.edges;
-  return variants.length ? variants[0].node.inventoryItem.id : null;
+  if (!variants || !variants.length) return null;
+
+  const inventoryItem = variants[0].node.inventoryItem;
+  if (!inventoryItem) return null;
+
+  return inventoryItem.id;
 }
 
 async function updateShopifyStock(inventoryItemId, quantity) {
