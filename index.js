@@ -436,11 +436,18 @@ app.get('/debug-skus', async (req, res) => {
       invId:  e.node.variants.edges[0]?.node?.inventoryItem?.id || 'missing',
     })) ?? 'error';
 
-    results.combisteelCount  = results.combisteelProducts.length;
-    results.ourTargetSkus    = getCombisteelSkus();
-    results.matchCount       = results.combisteelProducts.filter(
-      p => results.ourTargetSkus.includes(p.sku)
-    ).length;
+    results.combisteelProductsRaw = combiData;
+results.ourTargetSkus = getCombisteelSkus();
+
+if (Array.isArray(results.combisteelProducts)) {
+  results.combisteelCount = results.combisteelProducts.length;
+  results.matchCount = results.combisteelProducts.filter(
+    p => results.ourTargetSkus.includes(p.sku)
+  ).length;
+} else {
+  results.combisteelCount = 0;
+  results.matchCount      = 0;
+}
 
     return res.json(results);
 
