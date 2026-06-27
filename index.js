@@ -459,10 +459,10 @@ if (Array.isArray(results.combisteelProducts)) {
 // ─────────────────────────────────────────────────────────────
 // OAUTH
 // ─────────────────────────────────────────────────────────────
-const SHOPIFY_CLIENT_ID     = 'c8e4d2487bec463309905342a2cdfb4b';
+const SHOPIFY_CLIENT_ID     = 'ccac156d006386a5fe1871bccdbbe86f';
 const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '';
 const SHOP_DOMAIN           = 'koolmaxgroup.myshopify.com';
-const SCOPES                = 'read_products,write_products,read_inventory,write_inventory,read_locations';
+const SCOPES                = 'write_inventory,read_inventory,write_inventory_shipments,read_inventory_shipments,read_locations,read_products,write_products,read_shipping,write_shipping';
 const REDIRECT_URI          = 'https://koolmax-shipping-production.up.railway.app/auth/callback';
 
 app.get('/auth', (req, res) => {
