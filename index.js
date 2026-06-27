@@ -397,6 +397,44 @@ app.get('/sync-stock', async (req, res) => {
   runCombisteelStockSync();
 });
 
+
+//test code from here
+app.get('/debug-skus', async (req, res) => {
+  try {
+    const found = [];
+    let cursor = null, hasNext = true;
+
+    while (hasNext && found.length < 500) {
+      const after = cursor ? `, after: "${cursor}"` : '';
+      const query = `{ productVariants(first: 250${after}) { pageInfo { hasNextPage endCursor } edges { node { sku product { title vendor } } } } }`;
+      const url   = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
+      const data  = await graphqlRequest(url, query, {
+        'Content-Type': 'application/json',
+        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+      });
+      const { edges, pageInfo } = data.data.productVariants;
+      for (const e of edges) {
+        if (e.node.product.vendor === 'Combisteel') {
+          found.push({ sku: e.node.sku, title: e.node.product.title });
+        }
+      }
+      hasNext = pageInfo.hasNextPage;
+      cursor  = pageInfo.endCursor;
+    }
+
+    const targets = getCombisteelSkus();
+    res.json({
+      totalCombisteelVariantsInShopify: found.length,
+      sampleSkus: found.slice(0, 15),
+      ourTargetSkus: targets,
+      matched: targets.filter(t => found.some(f => f.sku === t)),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+
+
 // ─────────────────────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────────────────────
