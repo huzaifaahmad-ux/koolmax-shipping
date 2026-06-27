@@ -306,6 +306,7 @@ async function updateShopifyStock(inventoryItemId, quantity) {
     inventorySetQuantities(input: {
       reason: "correction"
       name: "available"
+      ignoreCompareQuantity: true
       quantities: [{
         inventoryItemId: "${inventoryItemId}"
         locationId: "${SHOPIFY_LOCATION}"
@@ -317,12 +318,10 @@ async function updateShopifyStock(inventoryItemId, quantity) {
   }`;
 
   const data = await shopifyGraphQL(mutation);
-
   if (!data?.data?.inventorySetQuantities) {
     console.error('[Shopify] Bad mutation response');
     return false;
   }
-
   const errors = data.data.inventorySetQuantities.userErrors;
   if (errors.length) { console.error('[Shopify] userErrors:', errors); return false; }
   return true;
