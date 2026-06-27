@@ -397,54 +397,6 @@ app.get('/sync-stock', async (req, res) => {
   runCombisteelStockSync();
 });
 
-
-//test code from here
-app.get('/debug-skus', async (req, res) => {
-  try {
-    // First test basic connection
-    const testQuery = `{ shop { name myshopifyDomain } }`;
-    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-    
-    const testData = await graphqlRequest(url, testQuery, {
-      'Content-Type':           'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-    });
-
-    // If shop query fails return raw response
-    if (!testData?.data?.shop) {
-      return res.json({
-        error: 'Shop query failed',
-        rawResponse: testData,
-        storeUrl: SHOPIFY_STORE,
-        tokenPrefix: SHOPIFY_TOKEN.substring(0, 10) + '...',
-      });
-    }
-
-    // Shop connected — now fetch variants
-    const variantQuery = `{ productVariants(first: 10) { edges { node { sku product { title vendor } } } } }`;
-    const variantData  = await graphqlRequest(url, variantQuery, {
-      'Content-Type':           'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-    });
-
-    return res.json({
-      shop:        testData.data.shop,
-      storeUrl:    SHOPIFY_STORE,
-      tokenPrefix: SHOPIFY_TOKEN.substring(0, 10) + '...',
-      variantSample: variantData,
-    });
-
-  } catch (err) {
-    res.status(500).json({
-      error:       err.message,
-      storeUrl:    SHOPIFY_STORE,
-      tokenPrefix: SHOPIFY_TOKEN ? SHOPIFY_TOKEN.substring(0, 10) + '...' : 'NOT SET',
-    });
-  }
-});
-
-
-
 // ─────────────────────────────────────────────────────────────
 // HEALTH CHECK
 // ─────────────────────────────────────────────────────────────
@@ -463,4 +415,76 @@ app.listen(PORT, () => {
     setInterval(runCombisteelStockSync, 60 * 60 * 1000);
   }, 30000);
   console.log('[Scheduler] Stock sync every 1 hour\n');
+});
+
+// ─────────────────────────────────────────────────────────────
+// OAUTH — One-time token retrieval
+// ─────────────────────────────────────────────────────────────
+const SHOPIFY_CLIENT_ID     = 'c8e4d2487bec463309905342a2cdfb4b';
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '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';
+const SHOP                  = 'koolmaxgroup.myshopify.com';
+const SCOPES                = 'read_products,write_products,read_inventory,write_inventory,read_locations';
+const REDIRECT_URI          = 'https://koolmax-shipping-production.up.railway.app/auth/callback';
+
+// Step 1 — Visit this to start OAuth
+app.get('/auth', (req, res) => {
+  const authUrl = `https://${SHOP}/admin/oauth/authorize?client_id=${SHOPIFY_CLIENT_ID}&scope=${SCOPES}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+  res.redirect(authUrl);
+});
+
+// Step 2 — Shopify redirects here with code
+app.get('/auth/callback', async (req, res) => {
+  const { code } = req.query;
+
+  if (!code) {
+    return res.status(400).send('No code received from Shopify');
+  }
+
+  try {
+    // Exchange code for permanent access token
+    const body = JSON.stringify({
+      client_id:     SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_CLIENT_SECRET,
+      code,
+    });
+
+    const tokenData = await new Promise((resolve, reject) => {
+      const opts = {
+        hostname: SHOP,
+        path:     '/admin/oauth/access_token',
+        method:   'POST',
+        headers:  {
+          'Content-Type':   'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+      const req2 = https.request(opts, (r) => {
+        let data = '';
+        r.on('data', c => data += c);
+        r.on('end', () => {
+          try { resolve(JSON.parse(data)); }
+          catch (e) { reject(new Error('Invalid response: ' + data)); }
+        });
+      });
+      req2.on('error', reject);
+      req2.write(body);
+      req2.end();
+    });
+
+    if (tokenData.access_token) {
+      res.send(`
+        <h2>✅ Success! Your Admin API Token:</h2>
+        <p style="font-size:18px;background:#f0f0f0;padding:20px;word-break:break-all;">
+          <strong>${tokenData.access_token}</strong>
+        </p>
+        <p>Copy this token and paste it into Railway as <strong>SHOPIFY_ACCESS_TOKEN</strong></p>
+        <p style="color:red;">⚠️ This page will not show the token again. Copy it now!</p>
+      `);
+    } else {
+      res.status(400).json({ error: 'No access token in response', raw: tokenData });
+    }
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
