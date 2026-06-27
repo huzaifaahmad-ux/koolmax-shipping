@@ -488,3 +488,81 @@ app.get('/auth/callback', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// ─────────────────────────────────────────────────────────────
+// DEBUG — Check what SKUs Shopify has for Combisteel products
+// ─────────────────────────────────────────────────────────────
+app.get('/debug-skus', async (req, res) => {
+  try {
+    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
+
+    // First test basic connection
+    const testData = await graphqlRequest(url, `{ shop { name myshopifyDomain } }`, {
+      'Content-Type':           'application/json',
+      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+    });
+
+    if (!testData?.data?.shop) {
+      return res.json({
+        error:       'Shop connection failed',
+        raw:         testData,
+        storeUrl:    SHOPIFY_STORE,
+        tokenPrefix: SHOPIFY_TOKEN ? SHOPIFY_TOKEN.substring(0,10)+'...' : 'NOT SET',
+      });
+    }
+
+    // Fetch Combisteel variants
+    const found   = [];
+    let cursor    = null;
+    let hasNext   = true;
+
+    while (hasNext && found.length < 500) {
+      const after = cursor ? `, after: "${cursor}"` : '';
+      const query = `{
+        productVariants(first: 250${after}) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              sku
+              product { title vendor }
+            }
+          }
+        }
+      }`;
+
+      const data = await graphqlRequest(url, query, {
+        'Content-Type':           'application/json',
+        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+      });
+
+      if (!data?.data?.productVariants) break;
+
+      const { edges, pageInfo } = data.data.productVariants;
+
+      for (const e of edges) {
+        if (e.node.product.vendor === 'Combisteel') {
+          found.push({ sku: e.node.sku || '(blank)', title: e.node.product.title });
+        }
+      }
+
+      hasNext = pageInfo.hasNextPage;
+      cursor  = pageInfo.endCursor;
+      await delay(200);
+    }
+
+    const targets = getCombisteelSkus();
+    const matched = targets.filter(t => found.some(f => f.sku === t));
+
+    return res.json({
+      shop:                        testData.data.shop,
+      totalCombisteelVariants:     found.length,
+      sampleSkus:                  found.slice(0, 20),
+      ourTargetSkus:               targets,
+      matchedSkus:                 matched,
+      matchCount:                  `${matched.length} / ${targets.length}`,
+    });
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
