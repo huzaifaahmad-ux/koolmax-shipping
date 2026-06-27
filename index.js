@@ -33,10 +33,8 @@ const INSTALLED_EXTRA       = 3.00;
 
 // ─────────────────────────────────────────────────────────────
 // SKU → GROUP MAPPING
-// All SKUs here — Koolmax format AND Combisteel numeric format
 // ─────────────────────────────────────────────────────────────
 const SKU_GROUP = {
-  // ── Koolmax SKUs ──────────────────────────────────────────
   'KMC200G':'G1','KMF200G':'G1','KMF200':'G1','KMC200':'G1','KMC200S':'G1',
   'KMC400':'G2','KMC400S':'G2','KMC600':'G2','KMC600S':'G2',
   'KMF400':'G2','KMF400S':'G2','KMF600':'G2','KMF600S':'G2',
@@ -58,8 +56,7 @@ const SKU_GROUP = {
   'KOOLMAX NICE 1875':'G5','KOOLMAX NICE 2500':'G5',
   'FRIGUS 2500 OPEN BLACK':'G5','FRIGUS 2500 OPEN WHITE':'G5',
   'OASIS 2500 FGD BLACK':'G5','OASIS 2500 FGD WHITE':'G5','VIANDE 2500':'G5',
-
-  // ── Combisteel numeric SKUs ───────────────────────────────
+  // Combisteel numeric SKUs
   '7455.1305':'G1','7527.0010':'G1','7455.1315':'G1',
   '7527.0020':'G1','7453.0004':'G1','7453.0006':'G1',
   '7455.2212':'G2','7455.2242':'G2','7455.2104':'G2',
@@ -78,10 +75,6 @@ const SKU_GROUP = {
   '7455.2525':'G5','7455.2535':'G5','7072.0115':'G5',
 };
 
-// ─────────────────────────────────────────────────────────────
-// Extract only Combisteel-format SKUs (numeric with dots)
-// These are the only ones we sync stock for
-// ─────────────────────────────────────────────────────────────
 function getCombisteelSkus() {
   return Object.keys(SKU_GROUP).filter(sku => /^\d+\.\d+$/.test(sku));
 }
@@ -144,9 +137,9 @@ app.post('/rates', (req, res) => {
 
     return res.json({ rates:[
       deliveryOnly,
-      { service_name:`Unpacked & Positioned — ${group}`,             service_code:`POSITIONED_${group}`, total_price:toPence(groupRates.positioned+POSITIONED_EXTRA), currency:'GBP', description:'Delivered, unpacked and positioned in your desired location.' },
-      { service_name:`Unpacked, Positioned & Installed — ${group}`,  service_code:`INSTALLED_${group}`,  total_price:toPence(groupRates.installed+INSTALLED_EXTRA),  currency:'GBP', description:'Fully installed including levelling and removal of laser film where applicable.' },
-      { service_name:`Uplifted Removal — ${group}`,                  service_code:`UPLIFTED_${group}`,   total_price:toPence(groupRates.collection+UPLIFTED_EXTRA),  currency:'GBP', description:'We collect your old unit and deliver the new one.' },
+      { service_name:`Unpacked & Positioned — ${group}`,            service_code:`POSITIONED_${group}`, total_price:toPence(groupRates.positioned+POSITIONED_EXTRA), currency:'GBP', description:'Delivered, unpacked and positioned in your desired location.' },
+      { service_name:`Unpacked, Positioned & Installed — ${group}`, service_code:`INSTALLED_${group}`,  total_price:toPence(groupRates.installed+INSTALLED_EXTRA),  currency:'GBP', description:'Fully installed including levelling and removal of laser film where applicable.' },
+      { service_name:`Uplifted Removal — ${group}`,                 service_code:`UPLIFTED_${group}`,   total_price:toPence(groupRates.collection+UPLIFTED_EXTRA),  currency:'GBP', description:'We collect your old unit and deliver the new one.' },
     ]});
   } catch (err) {
     console.error('Shipping error:', err);
@@ -184,24 +177,38 @@ function graphqlRequest(url, query, headers) {
 function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─────────────────────────────────────────────────────────────
-// STEP 1 — Build Shopify SKU map
-// Only fetches variants whose SKU is in our Combisteel list
+// SHOPIFY HELPERS
+// ─────────────────────────────────────────────────────────────
+function shopifyGraphQL(query) {
+  const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
+  return graphqlRequest(url, query, {
+    'Content-Type':           'application/json',
+    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// STEP 1 — Build Shopify SKU → inventoryItemId map
+// Queries products by vendor:Combisteel, maps each variant SKU
 // ─────────────────────────────────────────────────────────────
 async function buildShopifySkuMap(targetSkus) {
-  const skuMap  = {};
-  const skuSet  = new Set(targetSkus);
-  let cursor    = null;
-  let hasNext   = true;
+  const skuMap = {};
+  const skuSet = new Set(targetSkus);
+  let cursor   = null;
+  let hasNext  = true;
+  let page     = 0;
 
   console.log(`[Shopify] Building SKU map for ${targetSkus.length} target SKUs...`);
 
   while (hasNext) {
-    const after = cursor ? `, after: "${cursor}"` : '';
+    page++;
+    const afterClause = cursor ? `, after: "${cursor}"` : '';
     const query = `{
-      products(first: 250, query: "vendor:Combisteel"${after}) {
+      products(first: 250, query: "vendor:Combisteel"${afterClause}) {
         pageInfo { hasNextPage endCursor }
         edges {
           node {
+            title
             variants(first: 10) {
               edges {
                 node {
@@ -215,25 +222,22 @@ async function buildShopifySkuMap(targetSkus) {
       }
     }`;
 
-    const url  = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-    const data = await graphqlRequest(url, query, {
-      'Content-Type':           'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-    });
+    const data = await shopifyGraphQL(query);
 
     if (!data?.data?.products) {
-      console.error('[Shopify] Bad response building SKU map');
+      console.error(`[Shopify] Bad response on page ${page}:`, JSON.stringify(data).substring(0, 200));
       break;
     }
 
     const { edges, pageInfo } = data.data.products;
+    console.log(`[Shopify] Page ${page}: ${edges.length} products`);
 
     for (const productEdge of edges) {
       for (const variantEdge of productEdge.node.variants.edges) {
         const sku = (variantEdge.node.sku || '').trim();
         if (skuSet.has(sku) && variantEdge.node.inventoryItem?.id) {
           skuMap[sku] = variantEdge.node.inventoryItem.id;
-          console.log(`[Shopify] Mapped: ${sku} → ${variantEdge.node.inventoryItem.id}`);
+          console.log(`[Shopify] ✅ Mapped: ${sku}`);
         }
       }
     }
@@ -243,13 +247,12 @@ async function buildShopifySkuMap(targetSkus) {
     await delay(300);
   }
 
-  console.log(`[Shopify] Map complete — ${Object.keys(skuMap).length} / ${targetSkus.length} SKUs found`);
+  console.log(`[Shopify] Map complete — ${Object.keys(skuMap).length} / ${targetSkus.length} found`);
   return skuMap;
 }
 
 // ─────────────────────────────────────────────────────────────
-// STEP 2 — Fetch stock from Combisteel
-// Only keeps SKUs that are in our target list
+// STEP 2 — Fetch stock from Combisteel for our target SKUs only
 // ─────────────────────────────────────────────────────────────
 async function fetchCombisteelStock(targetSkus) {
   const skuSet   = new Set(targetSkus);
@@ -257,7 +260,7 @@ async function fetchCombisteelStock(targetSkus) {
   let after      = 0;
   const pageSize = 1000;
 
-  console.log(`[Combisteel] Fetching stock — looking for ${targetSkus.length} SKUs...`);
+  console.log(`[Combisteel] Fetching stock for ${targetSkus.length} target SKUs...`);
 
   while (true) {
     const query = `{ getProductListing(first: ${pageSize}, after: ${after}) { totalCount edges { node { sku stock } } } }`;
@@ -275,16 +278,14 @@ async function fetchCombisteelStock(targetSkus) {
 
     for (const edge of edges) {
       const sku = (edge.node.sku || '').trim();
-      // Only keep SKUs we care about
       if (skuSet.has(sku)) {
         matched.push({ sku, quantity: parseInt(edge.node.stock, 10) || 0 });
       }
     }
 
     const fetched = after + edges.length;
-    console.log(`[Combisteel] Scanned ${fetched} / ${totalCount} — matched ${matched.length} so far`);
+    console.log(`[Combisteel] Scanned ${fetched}/${totalCount} — matched ${matched.length} so far`);
 
-    // Stop early if we already found all target SKUs
     if (matched.length === targetSkus.length) {
       console.log('[Combisteel] All target SKUs found — stopping early');
       break;
@@ -294,12 +295,11 @@ async function fetchCombisteelStock(targetSkus) {
     after += pageSize;
   }
 
-  console.log(`[Combisteel] Done — matched ${matched.length} / ${targetSkus.length} target SKUs`);
   return matched;
 }
 
 // ─────────────────────────────────────────────────────────────
-// STEP 3 — Update stock in Shopify
+// STEP 3 — Update inventory in Shopify
 // ─────────────────────────────────────────────────────────────
 async function updateShopifyStock(inventoryItemId, quantity) {
   const mutation = `mutation {
@@ -316,11 +316,7 @@ async function updateShopifyStock(inventoryItemId, quantity) {
     }
   }`;
 
-  const url  = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-  const data = await graphqlRequest(url, mutation, {
-    'Content-Type':           'application/json',
-    'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-  });
+  const data = await shopifyGraphQL(mutation);
 
   if (!data?.data?.inventorySetQuantities) {
     console.error('[Shopify] Bad mutation response');
@@ -336,71 +332,178 @@ async function updateShopifyStock(inventoryItemId, quantity) {
 // MAIN SYNC
 // ─────────────────────────────────────────────────────────────
 async function runCombisteelStockSync() {
-  console.log(`\n[${new Date().toISOString()}] ════ Combisteel Stock Sync Start ════`);
-
-  let updated = 0;
-  let skipped = 0;
-  let errors  = 0;
+  console.log(`\n[${new Date().toISOString()}] ════ Sync Start ════`);
+  let updated=0, skipped=0, errors=0;
 
   try {
-    // Get list of Combisteel-format SKUs from our mapping
     const targetSkus = getCombisteelSkus();
-    console.log(`[Sync] Target SKUs to sync: ${targetSkus.length}`);
-    console.log(`[Sync] SKUs: ${targetSkus.join(', ')}`);
+    console.log(`[Sync] ${targetSkus.length} target SKUs`);
 
-    // Step 1 — Build Shopify inventory map (only for our target SKUs)
-    const skuMap = await buildShopifySkuMap(targetSkus);
-
-    // Step 2 — Fetch stock from Combisteel (only our target SKUs)
+    const skuMap  = await buildShopifySkuMap(targetSkus);
     const products = await fetchCombisteelStock(targetSkus);
 
-    // Step 3 — Update each matched product in Shopify
     for (const product of products) {
       try {
         const invId = skuMap[product.sku];
-
-        if (!invId) {
-          console.log(`⏭  ${product.sku} → in Combisteel but not found in Shopify`);
-          skipped++;
-          continue;
-        }
+        if (!invId) { skipped++; continue; }
 
         const ok = await updateShopifyStock(invId, product.quantity);
-        if (ok) {
-          console.log(`✅ ${product.sku} → qty: ${product.quantity}`);
-          updated++;
-        } else {
-          console.log(`❌ ${product.sku} → update failed`);
-          errors++;
-        }
-
+        if (ok) { console.log(`✅ ${product.sku} → qty:${product.quantity}`); updated++; }
+        else    { console.log(`❌ ${product.sku} → failed`); errors++; }
         await delay(300);
-
       } catch (err) {
         console.error(`❌ ${product.sku}:`, err.message);
         errors++;
       }
     }
 
-    console.log(`\n[${new Date().toISOString()}] ════ Sync Complete ════`);
-    console.log(`✅ Updated: ${updated} | ⏭  Skipped: ${skipped} | ❌ Errors: ${errors}\n`);
+    console.log(`\n[${new Date().toISOString()}] ════ Sync Done ════`);
+    console.log(`✅ Updated:${updated} | ⏭ Skipped:${skipped} | ❌ Errors:${errors}\n`);
 
   } catch (err) {
-    console.error('[Sync] Fatal error (shipping unaffected):', err.message);
+    console.error('[Sync] Fatal error:', err.message);
   }
 }
 
 // ─────────────────────────────────────────────────────────────
-// MANUAL TRIGGER
+// MANUAL SYNC TRIGGER
 // ─────────────────────────────────────────────────────────────
 app.get('/sync-stock', async (req, res) => {
-  const targetSkus = getCombisteelSkus();
-  res.json({
-    message:     'Stock sync started — check Railway logs',
-    targetSkus:  targetSkus.length,
-    skus:        targetSkus,
-  });
+  res.json({ message:'Sync started — check Railway logs', skus: getCombisteelSkus() });
   runCombisteelStockSync();
+});
+
+// ─────────────────────────────────────────────────────────────
+// DEBUG — Step by step connection test
+// ─────────────────────────────────────────────────────────────
+app.get('/debug-skus', async (req, res) => {
+  try {
+    const results = {
+      storeUrl:    SHOPIFY_STORE,
+      tokenPrefix: SHOPIFY_TOKEN ? SHOPIFY_TOKEN.substring(0,10)+'...' : 'NOT SET',
+    };
+
+    // Test 1 — Basic shop connection
+    const shopData = await shopifyGraphQL(`{ shop { name myshopifyDomain } }`);
+    if (!shopData?.data?.shop) {
+      return res.json({ ...results, step:'shop query failed', raw: shopData });
+    }
+    results.shop = shopData.data.shop;
+
+    // Test 2 — Count ALL products (no filter)
+    const countData = await shopifyGraphQL(`{ productsCount { count } }`);
+    results.totalProductsInStore = countData?.data?.productsCount?.count ?? 'error';
+
+    // Test 3 — First 5 products with NO filter (see what's there)
+    const sampleData = await shopifyGraphQL(`{
+      products(first: 5) {
+        edges {
+          node {
+            title
+            vendor
+            variants(first: 1) {
+              edges { node { sku inventoryItem { id } } }
+            }
+          }
+        }
+      }
+    }`);
+    results.first5Products = sampleData?.data?.products?.edges?.map(e => ({
+      title:  e.node.title,
+      vendor: e.node.vendor,
+      sku:    e.node.variants.edges[0]?.node?.sku || '(blank)',
+      invId:  e.node.variants.edges[0]?.node?.inventoryItem?.id || 'missing',
+    })) ?? 'error';
+
+    // Test 4 — Products with vendor:Combisteel filter
+    const combiData = await shopifyGraphQL(`{
+      products(first: 20, query: "vendor:Combisteel") {
+        edges {
+          node {
+            title
+            vendor
+            variants(first: 1) {
+              edges { node { sku inventoryItem { id } } }
+            }
+          }
+        }
+      }
+    }`);
+    results.combisteelProducts = combiData?.data?.products?.edges?.map(e => ({
+      title:  e.node.title,
+      vendor: e.node.vendor,
+      sku:    e.node.variants.edges[0]?.node?.sku || '(blank)',
+      invId:  e.node.variants.edges[0]?.node?.inventoryItem?.id || 'missing',
+    })) ?? 'error';
+
+    results.combisteelCount  = results.combisteelProducts.length;
+    results.ourTargetSkus    = getCombisteelSkus();
+    results.matchCount       = results.combisteelProducts.filter(
+      p => results.ourTargetSkus.includes(p.sku)
+    ).length;
+
+    return res.json(results);
+
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─────────────────────────────────────────────────────────────
+// OAUTH
+// ─────────────────────────────────────────────────────────────
+const SHOPIFY_CLIENT_ID     = 'c8e4d2487bec463309905342a2cdfb4b';
+const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '';
+const SHOP_DOMAIN           = 'koolmaxgroup.myshopify.com';
+const SCOPES                = 'read_products,write_products,read_inventory,write_inventory,read_locations';
+const REDIRECT_URI          = 'https://koolmax-shipping-production.up.railway.app/auth/callback';
+
+app.get('/auth', (req, res) => {
+  const authUrl = `https://${SHOP_DOMAIN}/admin/oauth/authorize?client_id=${SHOPIFY_CLIENT_ID}&scope=${SCOPES}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
+  res.redirect(authUrl);
+});
+
+app.get('/auth/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send('No code received');
+
+  try {
+    const body = JSON.stringify({
+      client_id:     SHOPIFY_CLIENT_ID,
+      client_secret: SHOPIFY_CLIENT_SECRET,
+      code,
+    });
+
+    const tokenData = await new Promise((resolve, reject) => {
+      const opts = {
+        hostname: SHOP_DOMAIN,
+        path:     '/admin/oauth/access_token',
+        method:   'POST',
+        headers:  { 'Content-Type':'application/json', 'Content-Length': Buffer.byteLength(body) },
+      };
+      const req2 = https.request(opts, (r) => {
+        let data = '';
+        r.on('data', c => data += c);
+        r.on('end', () => { try { resolve(JSON.parse(data)); } catch(e) { reject(e); } });
+      });
+      req2.on('error', reject);
+      req2.write(body);
+      req2.end();
+    });
+
+    if (tokenData.access_token) {
+      res.send(`<h2>✅ Your Admin API Token:</h2>
+        <p style="background:#f0f0f0;padding:20px;word-break:break-all;font-size:18px;">
+          <strong>${tokenData.access_token}</strong>
+        </p>
+        <p>Paste this into Railway as <strong>SHOPIFY_ACCESS_TOKEN</strong></p>
+        <p style="color:red;">⚠️ Copy it now — it won't show again!</p>`);
+    } else {
+      res.status(400).json({ error:'No token returned', raw: tokenData });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -414,165 +517,10 @@ app.get('/', (req, res) => res.send('Koolmax Shipping + Stock Sync — OK'));
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`\nKoolmax service running on port ${PORT}`);
-  console.log(`Combisteel SKUs to sync: ${getCombisteelSkus().length}`);
-  // Run 30s after startup then every hour
+  console.log(`Target Combisteel SKUs: ${getCombisteelSkus().length}`);
   setTimeout(() => {
     runCombisteelStockSync();
     setInterval(runCombisteelStockSync, 60 * 60 * 1000);
   }, 30000);
   console.log('[Scheduler] Stock sync every 1 hour\n');
-});
-
-// ─────────────────────────────────────────────────────────────
-// OAUTH — One-time token retrieval
-// ─────────────────────────────────────────────────────────────
-const SHOPIFY_CLIENT_ID     = 'c8e4d2487bec463309905342a2cdfb4b';
-const SHOPIFY_CLIENT_SECRET = process.env.SHOPIFY_CLIENT_SECRET || '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';
-const SHOP                  = 'koolmaxgroup.myshopify.com';
-const SCOPES                = 'read_products,write_products,read_inventory,write_inventory,read_locations';
-const REDIRECT_URI          = 'https://koolmax-shipping-production.up.railway.app/auth/callback';
-
-// Step 1 — Visit this to start OAuth
-app.get('/auth', (req, res) => {
-  const authUrl = `https://${SHOP}/admin/oauth/authorize?client_id=${SHOPIFY_CLIENT_ID}&scope=${SCOPES}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}`;
-  res.redirect(authUrl);
-});
-
-// Step 2 — Shopify redirects here with code
-app.get('/auth/callback', async (req, res) => {
-  const { code } = req.query;
-
-  if (!code) {
-    return res.status(400).send('No code received from Shopify');
-  }
-
-  try {
-    // Exchange code for permanent access token
-    const body = JSON.stringify({
-      client_id:     SHOPIFY_CLIENT_ID,
-      client_secret: SHOPIFY_CLIENT_SECRET,
-      code,
-    });
-
-    const tokenData = await new Promise((resolve, reject) => {
-      const opts = {
-        hostname: SHOP,
-        path:     '/admin/oauth/access_token',
-        method:   'POST',
-        headers:  {
-          'Content-Type':   'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      };
-      const req2 = https.request(opts, (r) => {
-        let data = '';
-        r.on('data', c => data += c);
-        r.on('end', () => {
-          try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error('Invalid response: ' + data)); }
-        });
-      });
-      req2.on('error', reject);
-      req2.write(body);
-      req2.end();
-    });
-
-    if (tokenData.access_token) {
-      res.send(`
-        <h2>✅ Success! Your Admin API Token:</h2>
-        <p style="font-size:18px;background:#f0f0f0;padding:20px;word-break:break-all;">
-          <strong>${tokenData.access_token}</strong>
-        </p>
-        <p>Copy this token and paste it into Railway as <strong>SHOPIFY_ACCESS_TOKEN</strong></p>
-        <p style="color:red;">⚠️ This page will not show the token again. Copy it now!</p>
-      `);
-    } else {
-      res.status(400).json({ error: 'No access token in response', raw: tokenData });
-    }
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─────────────────────────────────────────────────────────────
-// DEBUG — Check what SKUs Shopify has for Combisteel products
-// ─────────────────────────────────────────────────────────────
-app.get('/debug-skus', async (req, res) => {
-  try {
-    const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
-
-    const testData = await graphqlRequest(url, `{ shop { name } }`, {
-      'Content-Type':           'application/json',
-      'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-    });
-
-    if (!testData?.data?.shop) {
-      return res.json({ error: 'Connection failed', raw: testData });
-    }
-
-    const found   = [];
-    let cursor    = null;
-    let hasNext   = true;
-
-    while (hasNext) {
-      const after = cursor ? `, after: "${cursor}"` : '';
-      const query = `{
-        products(first: 250, query: "vendor:Combisteel"${after}) {
-          pageInfo { hasNextPage endCursor }
-          edges {
-            node {
-              title
-              variants(first: 10) {
-                edges {
-                  node {
-                    sku
-                    inventoryItem { id }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }`;
-
-      const data = await graphqlRequest(url, query, {
-        'Content-Type':           'application/json',
-        'X-Shopify-Access-Token': SHOPIFY_TOKEN,
-      });
-
-      if (!data?.data?.products) break;
-
-      const { edges, pageInfo } = data.data.products;
-
-      for (const pe of edges) {
-        for (const ve of pe.node.variants.edges) {
-          found.push({
-            sku:   ve.node.sku || '(blank)',
-            title: pe.node.title,
-            invId: ve.node.inventoryItem?.id || 'missing',
-          });
-        }
-      }
-
-      hasNext = pageInfo.hasNextPage;
-      cursor  = pageInfo.endCursor;
-      await delay(200);
-    }
-
-    const targets = getCombisteelSkus();
-    const matched = targets.filter(t => found.some(f => f.sku === t));
-
-    return res.json({
-      shop:                    testData.data.shop,
-      totalCombisteelVariants: found.length,
-      sampleSkus:              found.slice(0, 20),
-      ourTargetSkus:           targets,
-      matchedSkus:             matched,
-      matchCount:              `${matched.length} / ${targets.length}`,
-    });
-
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
 });
