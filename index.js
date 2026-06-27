@@ -192,19 +192,24 @@ async function buildShopifySkuMap(targetSkus) {
   const skuSet  = new Set(targetSkus);
   let cursor    = null;
   let hasNext   = true;
-  let pageCount = 0;
 
   console.log(`[Shopify] Building SKU map for ${targetSkus.length} target SKUs...`);
 
   while (hasNext) {
-    const afterClause = cursor ? `, after: "${cursor}"` : '';
+    const after = cursor ? `, after: "${cursor}"` : '';
     const query = `{
-      productVariants(first: 250${afterClause}) {
+      products(first: 250, query: "vendor:Combisteel"${after}) {
         pageInfo { hasNextPage endCursor }
         edges {
           node {
-            sku
-            inventoryItem { id }
+            variants(first: 10) {
+              edges {
+                node {
+                  sku
+                  inventoryItem { id }
+                }
+              }
+            }
           }
         }
       }
@@ -216,28 +221,29 @@ async function buildShopifySkuMap(targetSkus) {
       'X-Shopify-Access-Token': SHOPIFY_TOKEN,
     });
 
-    if (!data?.data?.productVariants) {
-      console.error('[Shopify] Bad response on page', pageCount + 1);
+    if (!data?.data?.products) {
+      console.error('[Shopify] Bad response building SKU map');
       break;
     }
 
-    const { edges, pageInfo } = data.data.productVariants;
+    const { edges, pageInfo } = data.data.products;
 
-    for (const edge of edges) {
-      const sku = (edge.node.sku || '').trim();
-      // Only store SKUs we actually care about
-      if (skuSet.has(sku) && edge.node.inventoryItem?.id) {
-        skuMap[sku] = edge.node.inventoryItem.id;
+    for (const productEdge of edges) {
+      for (const variantEdge of productEdge.node.variants.edges) {
+        const sku = (variantEdge.node.sku || '').trim();
+        if (skuSet.has(sku) && variantEdge.node.inventoryItem?.id) {
+          skuMap[sku] = variantEdge.node.inventoryItem.id;
+          console.log(`[Shopify] Mapped: ${sku} → ${variantEdge.node.inventoryItem.id}`);
+        }
       }
     }
 
-    pageCount++;
     hasNext = pageInfo.hasNextPage;
     cursor  = pageInfo.endCursor;
     await delay(300);
   }
 
-  console.log(`[Shopify] Map built — found ${Object.keys(skuMap).length} / ${targetSkus.length} target SKUs in Shopify`);
+  console.log(`[Shopify] Map complete — ${Object.keys(skuMap).length} / ${targetSkus.length} SKUs found`);
   return skuMap;
 }
 
@@ -496,35 +502,35 @@ app.get('/debug-skus', async (req, res) => {
   try {
     const url = `https://${SHOPIFY_STORE}/admin/api/${SHOPIFY_VERSION}/graphql.json`;
 
-    // First test basic connection
-    const testData = await graphqlRequest(url, `{ shop { name myshopifyDomain } }`, {
+    const testData = await graphqlRequest(url, `{ shop { name } }`, {
       'Content-Type':           'application/json',
       'X-Shopify-Access-Token': SHOPIFY_TOKEN,
     });
 
     if (!testData?.data?.shop) {
-      return res.json({
-        error:       'Shop connection failed',
-        raw:         testData,
-        storeUrl:    SHOPIFY_STORE,
-        tokenPrefix: SHOPIFY_TOKEN ? SHOPIFY_TOKEN.substring(0,10)+'...' : 'NOT SET',
-      });
+      return res.json({ error: 'Connection failed', raw: testData });
     }
 
-    // Fetch Combisteel variants
     const found   = [];
     let cursor    = null;
     let hasNext   = true;
 
-    while (hasNext && found.length < 500) {
+    while (hasNext) {
       const after = cursor ? `, after: "${cursor}"` : '';
       const query = `{
-        productVariants(first: 250${after}) {
+        products(first: 250, query: "vendor:Combisteel"${after}) {
           pageInfo { hasNextPage endCursor }
           edges {
             node {
-              sku
-              product { title vendor }
+              title
+              variants(first: 10) {
+                edges {
+                  node {
+                    sku
+                    inventoryItem { id }
+                  }
+                }
+              }
             }
           }
         }
@@ -535,13 +541,17 @@ app.get('/debug-skus', async (req, res) => {
         'X-Shopify-Access-Token': SHOPIFY_TOKEN,
       });
 
-      if (!data?.data?.productVariants) break;
+      if (!data?.data?.products) break;
 
-      const { edges, pageInfo } = data.data.productVariants;
+      const { edges, pageInfo } = data.data.products;
 
-      for (const e of edges) {
-        if (e.node.product.vendor === 'Combisteel') {
-          found.push({ sku: e.node.sku || '(blank)', title: e.node.product.title });
+      for (const pe of edges) {
+        for (const ve of pe.node.variants.edges) {
+          found.push({
+            sku:   ve.node.sku || '(blank)',
+            title: pe.node.title,
+            invId: ve.node.inventoryItem?.id || 'missing',
+          });
         }
       }
 
@@ -554,12 +564,12 @@ app.get('/debug-skus', async (req, res) => {
     const matched = targets.filter(t => found.some(f => f.sku === t));
 
     return res.json({
-      shop:                        testData.data.shop,
-      totalCombisteelVariants:     found.length,
-      sampleSkus:                  found.slice(0, 20),
-      ourTargetSkus:               targets,
-      matchedSkus:                 matched,
-      matchCount:                  `${matched.length} / ${targets.length}`,
+      shop:                    testData.data.shop,
+      totalCombisteelVariants: found.length,
+      sampleSkus:              found.slice(0, 20),
+      ourTargetSkus:           targets,
+      matchedSkus:             matched,
+      matchCount:              `${matched.length} / ${targets.length}`,
     });
 
   } catch (err) {
