@@ -417,7 +417,7 @@ async function updateShopifyStock(inventoryItemId, quantity) {
   inventorySetQuantities(input: {
     reason: "correction"
     name: "available"
-    changeFromQuantity: null
+    ignoreCompareQuantity: true
     quantities: [{
       inventoryItemId: "${inventoryItemId}"
       locationId: "${SHOPIFY_LOCATION}"
