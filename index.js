@@ -417,7 +417,7 @@ async function updateShopifyStock(inventoryItemId, quantity) {
     inventorySetQuantities(input: {
       reason: "correction"
       name: "available"
-      changeFromQuantity: null
+      ignoreCompareQuantity: true
       quantities: [{
         inventoryItemId: "${inventoryItemId}"
         locationId: "${SHOPIFY_LOCATION}"
@@ -431,7 +431,7 @@ async function updateShopifyStock(inventoryItemId, quantity) {
   const data = await shopifyGraphQL(mutation);
 
   if (!data?.data?.inventorySetQuantities) {
-    console.error('[Shopify] Bad mutation response:', JSON.stringify(data).substring(0,300));
+    console.error('[Shopify] Bad mutation response');
     return false;
   }
 
