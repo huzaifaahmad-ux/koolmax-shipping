@@ -12,7 +12,7 @@ const COMBISTEEL_URL     = 'https://pim.combisteel.com/pimcore-graphql-webservic
 const COMBISTEEL_API_KEY = process.env.COMBISTEEL_API_KEY || 'feed23626ace249b399514a2fc4396187b27';
 const SHOPIFY_STORE      = process.env.SHOPIFY_STORE_URL    || '';
 const SHOPIFY_TOKEN      = process.env.SHOPIFY_ACCESS_TOKEN || '';
-const SHOPIFY_VERSION    = process.env.SHOPIFY_API_VERSION  || '2025-01';
+const SHOPIFY_VERSION    = process.env.SHOPIFY_API_VERSION  || '2026-01';
 const SHOPIFY_LOCATION   = process.env.SHOPIFY_LOCATION_ID  || '';
 
 // ─────────────────────────────────────────────────────────────
@@ -554,6 +554,11 @@ app.get('/debug-skus', async (req, res) => {
 // HEALTH CHECK
 // ─────────────────────────────────────────────────────────────
 app.get('/', (req, res) => res.send('Koolmax Shipping + Stock Sync — OK'));
+app.get('/', (req, res) => res.json({
+  status: 'OK',
+  shopifyVersion: SHOPIFY_VERSION,
+  shopifyStore: SHOPIFY_STORE,
+}));
 
 // ─────────────────────────────────────────────────────────────
 // START
