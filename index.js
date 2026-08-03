@@ -414,24 +414,24 @@ async function fetchCombisteelStock(targetSkus) {
 // ─────────────────────────────────────────────────────────────
 async function updateShopifyStock(inventoryItemId, quantity) {
   const mutation = `mutation {
-  inventorySetQuantities(input: {
-    reason: "correction"
-    name: "available"
-    ignoreCompareQuantity: true
-    quantities: [{
-      inventoryItemId: "${inventoryItemId}"
-      locationId: "${SHOPIFY_LOCATION}"
-      quantity: ${quantity}
-    }]
-  }) {
-    userErrors { field message }
-  }
-}`;
+    inventorySetQuantities(input: {
+      reason: "correction"
+      name: "available"
+      changeFromQuantity: null
+      quantities: [{
+        inventoryItemId: "${inventoryItemId}"
+        locationId: "${SHOPIFY_LOCATION}"
+        quantity: ${quantity}
+      }]
+    }) {
+      userErrors { field message }
+    }
+  }`;
 
   const data = await shopifyGraphQL(mutation);
 
   if (!data?.data?.inventorySetQuantities) {
-    console.error('[Shopify] Bad mutation response');
+    console.error('[Shopify] Bad mutation response:', JSON.stringify(data).substring(0,300));
     return false;
   }
 
@@ -439,7 +439,6 @@ async function updateShopifyStock(inventoryItemId, quantity) {
   if (errors.length) { console.error('[Shopify] userErrors:', errors); return false; }
   return true;
 }
-
 // ─────────────────────────────────────────────────────────────
 // MAIN SYNC
 // ─────────────────────────────────────────────────────────────
