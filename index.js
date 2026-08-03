@@ -414,19 +414,19 @@ async function fetchCombisteelStock(targetSkus) {
 // ─────────────────────────────────────────────────────────────
 async function updateShopifyStock(inventoryItemId, quantity) {
   const mutation = `mutation {
-    inventorySetQuantities(input: {
-      reason: "correction"
-      name: "available"
-      ignoreCompareQuantity: true
-      quantities: [{
-        inventoryItemId: "${inventoryItemId}"
-        locationId: "${SHOPIFY_LOCATION}"
-        quantity: ${quantity}
-      }]
-    }) {
-      userErrors { field message }
-    }
-  }`;
+  inventorySetQuantities(input: {
+    reason: "correction"
+    name: "available"
+    changeFromQuantity: null
+    quantities: [{
+      inventoryItemId: "${inventoryItemId}"
+      locationId: "${SHOPIFY_LOCATION}"
+      quantity: ${quantity}
+    }]
+  }) {
+    userErrors { field message }
+  }
+}`;
 
   const data = await shopifyGraphQL(mutation);
 
