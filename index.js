@@ -181,8 +181,8 @@ function calculateTotals(items) {
     const qty = item.quantity || 1;
     totalQty += qty;
 
-    const group = SKU_GROUP[sku] || 'G3';
-    if (!SKU_GROUP[sku]) console.warn(`Unknown SKU: "${sku}" — defaulting to G3`);
+    const group = SKU_GROUP[sku] || importer.getDynamicGroup(sku) || 'G3';
+    if (!SKU_GROUP[sku] && !importer.getDynamicGroup(sku)) console.warn(`Unknown SKU: "${sku}" — defaulting to G3`);
 
     const r = RATES[group];
     positionedTotal += (r.positioned + POSITIONED_EXTRA) * qty;
@@ -582,6 +582,12 @@ app.get('/', (req, res) => res.send('Koolmax Shipping + Stock Sync — OK'));
 // START
 // ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
+const { createImporter } = require('./importer');
+const importer = createImporter({ skuGroup: SKU_GROUP });
+app.use('/admin', importer.router);
+
+importer.loadDynamicGroups();
+setInterval(() => importer.loadDynamicGroups(), 60 * 60 * 1000);
 app.listen(PORT, () => {
   console.log(`\nKoolmax service running on port ${PORT}`);
   console.log(`Combisteel SKUs to sync: ${getCombisteelSkus().length}`);
