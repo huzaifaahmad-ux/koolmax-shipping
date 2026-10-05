@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Combisteel importer – Koolmax</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@75..100,400..700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #E9EEF1; --panel: #FFFFFF; --ink: #15232C; --muted: #5B6B75; --line: #CAD4DA;
+    --accent: #0B6A88; --accent-ink: #FFFFFF; --ok: #2F7A4F; --warn: #A8681A; --err: #B03A2E;
+    --frost: #D6E6EC;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: 'Archivo', system-ui, -apple-system, 'Segoe UI', sans-serif; font-size: 15px; line-height: 1.45; }
+  button, input, select, textarea { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  header { background: var(--ink); color: #fff; padding: 18px 28px 0; }
+  .brand { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .brand h1 { margin: 0; font-size: 26px; font-weight: 700; font-stretch: 78%; letter-spacing: 0.01em; }
+  .brand span { color: #9FB4BF; font-size: 14px; }
+
+  .formula { display: flex; align-items: stretch; margin: 16px 0 0; border: 1px solid #36505E; border-bottom: 0;
+    width: fit-content; max-width: 100%; overflow-x: auto; }
+  .formula div { padding: 8px 16px; border-right: 1px solid #36505E; white-space: nowrap; }
+  .formula div:last-child { border-right: 0; background: var(--frost); color: var(--ink); }
+  .formula small { display: block; color: #9FB4BF; font-size: 12px; }
+  .formula div:last-child small { color: var(--muted); }
+  .formula b { font-stretch: 80%; font-size: 18px; }
+
+  nav { display: flex; gap: 2px; margin-top: 0; }
+  nav button { background: transparent; border: 0; color: #C5D3DA; padding: 12px 18px; cursor: pointer; font-weight: 600; }
+  nav button[aria-selected="true"] { background: var(--bg); color: var(--ink); }
+
+  main { padding: 24px 28px 60px; max-width: 1500px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); padding: 20px; }
+  .row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end; }
+  label.field { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; }
+  textarea { width: min(560px, 100%); min-height: 120px; padding: 10px; border: 1px solid var(--line); resize: vertical; }
+  input[type=text], input[type=number], input[type=password], input[type=search], select {
+    padding: 7px 9px; border: 1px solid var(--line); background: #fff; min-width: 0; }
+  .btn { background: var(--accent); color: var(--accent-ink); border: 0; padding: 10px 18px; font-weight: 600; cursor: pointer; }
+  .btn.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
+  .btn:disabled { opacity: .55; cursor: progress; }
+  .hint { color: var(--muted); font-size: 13px; }
+  .status { margin: 14px 0 0; min-height: 22px; }
+  .status.err { color: var(--err); }
+
+  .table-wrap { overflow-x: auto; margin-top: 18px; border: 1px solid var(--line); background: var(--panel); }
+  table { border-collapse: collapse; width: 100%; min-width: 1100px; }
+  th, td { text-align: left; padding: 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { font-size: 13px; color: var(--muted); font-weight: 600; background: #F5F8F9; }
+  tr.blocked td { background: #FBF6F5; }
+  td img { width: 64px; height: 64px; object-fit: contain; background: #fff; border: 1px solid var(--line); }
+  td input.title { width: 280px; }
+  td input.price { width: 100px; }
+  .sku { font-weight: 700; font-stretch: 85%; }
+  .note { font-size: 13px; margin-top: 4px; }
+  .note.err { color: var(--err); } .note.warn { color: var(--warn); } .note.ok { color: var(--ok); }
+  .tag { display: inline-block; font-size: 12px; padding: 1px 6px; border: 1px solid var(--line); color: var(--muted); margin-top: 4px; }
+  details summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  details .seo { display: grid; gap: 8px; margin-top: 8px; width: 340px; }
+  details ul { margin: 6px 0 0; padding-left: 18px; font-size: 13px; }
+  .cat { display: grid; gap: 6px; width: 260px; }
+  .cat select { width: 100%; }
+  .stock-num { font-weight: 700; }
+  .stock-num.zero { color: var(--err); }
+  a { color: var(--accent); }
+
+  .login { max-width: 380px; margin: 60px auto; }
+  .login h2 { margin: 0 0 6px; font-stretch: 80%; }
+  [hidden] { display: none !important; }
+
+  @media (max-width: 700px) { header, main { padding-left: 14px; padding-right: 14px; } }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>Combisteel importer</h1>
+    <span>Koolmax Shopify</span>
+  </div>
+  <div class="formula" aria-label="Price formula">
+    <div><small>Combisteel price</small><b id="fx-api">£715.00</b></div>
+    <div><small>Plus 45%</small><b id="fx-up">£1,036.75</b></div>
+    <div><small>Minus 37%</small><b id="fx-down">£653.15</b></div>
+    <div><small>Shopify price</small><b id="fx-final">£653.15</b></div>
+  </div>
+  <nav role="tablist">
+    <button role="tab" aria-selected="true" data-tab="add">Add products</button>
+    <button role="tab" aria-selected="false" data-tab="stock">Live stock</button>
+  </nav>
+</header>
+
+<main>
+  <section id="login" class="panel login" hidden>
+    <h2>Enter dashboard password</h2>
+    <p class="hint">Set as DASHBOARD_PASSWORD in Railway.</p>
+    <form id="login-form" class="row">
+      <input type="password" id="pw" autocomplete="current-password" aria-label="Password" required>
+      <button class="btn">Open dashboard</button>
+    </form>
+    <p id="login-msg" class="status err"></p>
+  </section>
+
+  <section id="tab-add">
+    <div class="panel">
+      <div class="row">
+        <label class="field">SKUs
+          <textarea id="skus" placeholder="7178.0100&#10;7333.0302, 7452.0024"></textarea>
+        </label>
+        <div style="display:grid; gap:10px;">
+          <label class="field">Create products as
+            <select id="status">
+              <option value="DRAFT">Draft (check before publishing)</option>
+              <option value="ACTIVE">Active (live on store)</option>
+            </select>
+          </label>
+          <button class="btn" id="preview-btn">Preview products</button>
+        </div>
+      </div>
+      <p class="hint">One SKU per line or separated by commas. Up to 50 at a time. Nothing is saved until you press Create.</p>
+      <p id="add-status" class="status"></p>
+    </div>
+
+    <div id="preview-area" hidden>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th><input type="checkbox" id="check-all" aria-label="Select all" checked></th>
+            <th>Image</th><th>SKU</th><th>Title</th><th>Price (GBP)</th><th>Stock</th>
+            <th>Shipping group</th><th>Category</th><th>SEO and specs</th>
+          </tr></thead>
+          <tbody id="preview-body"></tbody>
+        </table>
+      </div>
+      <div class="row" style="margin-top:16px;">
+        <button class="btn" id="create-btn">Create selected products</button>
+        <span class="hint" id="create-count"></span>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-stock" hidden>
+    <div class="panel">
+      <div class="row">
+        <button class="btn" id="load-stock">Load products</button>
+        <button class="btn secondary" id="run-sync">Run stock sync now</button>
+        <label class="field">Filter
+          <input type="search" id="stock-filter" placeholder="SKU or title">
+        </label>
+      </div>
+      <p class="hint">Stock syncs from Combisteel every hour. Shipping group comes from the code list first, then the product's shipping_group metafield.</p>
+      <p id="stock-status" class="status"></p>
+    </div>
+    <div class="table-wrap" id="stock-wrap" hidden>
+      <table>
+        <thead><tr><th>SKU</th><th>Product</th><th>Status</th><th>Price</th><th>Stock</th><th>Shipping group</th></tr></thead>
+        <tbody id="stock-body"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+const GROUPS = ['G1', 'G2', 'G3', 'G4', 'G5'];
+const BASE = location.pathname.replace(/\/$/, '') + '/';
+let key = '';
+try { key = sessionStorage.getItem('kx-key') || ''; } catch (e) {}
+let previewData = [];
+let stockRows = [];
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const gbp = n => n == null ? '–' : '£' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function api(path, opts = {}) {
+  const res = await fetch(BASE + 'api/' + path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'x-dashboard-key': key, ...(opts.headers || {}) },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 401) { showLogin('Wrong password. Try again.'); throw new Error('Wrong password'); }
+  if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
+  return data;
+}
+
+// ---------- Login ----------
+function showLogin(msg) {
+  $('#login').hidden = false; $('#tab-add').hidden = true; $('#tab-stock').hidden = true;
+  $('#login-msg').textContent = msg || '';
+}
+$('#login-form').addEventListener('submit', e => {
+  e.preventDefault();
+  key = $('#pw').value;
+  try { sessionStorage.setItem('kx-key', key); } catch (err) {}
+  $('#login').hidden = true; selectTab('add');
+});
+if (!key) showLogin();
+
+// ---------- Tabs ----------
+function selectTab(name) {
+  document.querySelectorAll('nav button').forEach(b => b.setAttribute('aria-selected', b.dataset.tab === name));
+  $('#tab-add').hidden = name !== 'add';
+  $('#tab-stock').hidden = name !== 'stock';
+}
+document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { if (key) selectTab(b.dataset.tab); }));
+
+// ---------- Formula strip ----------
+function showFormula(apiPrice) {
+  const up = apiPrice * 1.45, down = up * 0.63;
+  $('#fx-api').textContent = gbp(apiPrice);
+  $('#fx-up').textContent = gbp(up);
+  $('#fx-down').textContent = gbp(down);
+  $('#fx-final').textContent = gbp(Math.round(down * 100) / 100);
+}
+
+// ---------- Preview ----------
+$('#preview-btn').addEventListener('click', async () => {
+  const skus = $('#skus').value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+  if (!skus.length) { setStatus('#add-status', 'Add at least one SKU.', true); return; }
+  const btn = $('#preview-btn'); btn.disabled = true;
+  setStatus('#add-status', `Fetching ${skus.length} product${skus.length > 1 ? 's' : ''} from Combisteel…`);
+  try {
+    const { results } = await api('preview', { method: 'POST', body: JSON.stringify({ skus }) });
+    previewData = results;
+    renderPreview();
+    const ready = results.filter(r => !r.error && !r.exists).length;
+    setStatus('#add-status', `${ready} of ${results.length} ready to create.`);
+    const first = results.find(r => r.apiPrice != null);
+    if (first) showFormula(first.apiPrice);
+  } catch (e) {
+    setStatus('#add-status', e.message, true);
+  } finally { btn.disabled = false; }
+});
+
+function renderPreview() {
+  $('#preview-area').hidden = false;
+  $('#preview-body').innerHTML = previewData.map((r, i) => {
+    const blocked = r.error || r.exists;
+    if (blocked) {
+      return `<tr class="blocked"><td></td><td></td>
+        <td><div class="sku">${esc(r.sku)}</div></td>
+        <td colspan="6"><div class="note ${r.error ? 'err' : 'warn'}">${r.error ? esc(r.error)
+          : `Already in Shopify: <a href="${esc(r.exists.adminUrl)}" target="_blank" rel="noopener">${esc(r.exists.title)}</a>`}</div></td></tr>`;
+    }
+    const groupNote = r.groupSource === 'code' ? 'Already in shipping code'
+      : r.groupSource === 'suggested' ? `Suggested from ${r.weight} kg` : 'No weight data, choose a group';
+    const catOptions = (r.categoryOptions || []).map(c =>
+      `<option value="${esc(c.id)}" ${c.id === r.categoryId ? 'selected' : ''}>${esc(c.fullName)}</option>`).join('');
+    return `<tr data-i="${i}">
+      <td><input type="checkbox" class="pick" checked aria-label="Select ${esc(r.sku)}"></td>
+      <td>${r.images?.[0] ? `<img src="${esc(r.images[0])}" alt="" loading="lazy">` : '<span class="hint">No image</span>'}
+        ${r.images?.length > 1 ? `<div class="tag">${r.images.length} images</div>` : ''}</td>
+      <td><div class="sku">${esc(r.sku)}</div>${r.pimCategory ? `<div class="tag">${esc(r.pimCategory)}</div>` : ''}</td>
+      <td><input type="text" class="title" value="${esc(r.title)}" aria-label="Title"></td>
+      <td><input type="number" step="0.01" min="0" class="price" value="${r.price ?? ''}" aria-label="Price">
+        <div class="note">${r.apiPrice != null ? 'From ' + gbp(r.apiPrice) : '<span class="err">No price in API</span>'}</div></td>
+      <td><span class="stock-num ${r.stock ? '' : 'zero'}">${esc(r.stock)}</span></td>
+      <td><select class="group" aria-label="Shipping group">
+          <option value="">None</option>
+          ${GROUPS.map(g => `<option ${g === r.group ? 'selected' : ''}>${g}</option>`).join('')}
+        </select><div class="note">${esc(groupNote)}</div></td>
+      <td><div class="cat">
+          <select class="category" aria-label="Shopify category">
+            <option value="">No category</option>${catOptions}
+          </select>
+          <input type="search" class="cat-search" placeholder="Search categories" aria-label="Search categories">
+        </div></td>
+      <td><details><summary>SEO, ${r.features.length} features, ${r.specification.length} specs</summary>
+          <div class="seo">
+            <label class="field">Meta title <input type="text" class="seo-title" maxlength="70" value="${esc(r.seoTitle)}"></label>
+            <label class="field">Meta description <textarea class="seo-desc" maxlength="320" style="min-height:70px;width:100%">${esc(r.seoDescription)}</textarea></label>
+          </div>
+          <ul>${r.features.map(([l, v]) => `<li>${esc(v === 'Yes' ? l : l + ': ' + v)}</li>`).join('')}</ul>
+          <ul>${r.specification.map(([l, v]) => `<li>${esc(l)}: ${esc(v)}</li>`).join('')}</ul>
+        </details>
+        <div class="note result"></div></td>
+    </tr>`;
+  }).join('');
+  updateCount();
+}
+
+// Category search per row (debounced)
+let searchTimer;
+$('#preview-body').addEventListener('input', e => {
+  if (e.target.classList.contains('cat-search')) {
+    clearTimeout(searchTimer);
+    const input = e.target;
+    searchTimer = setTimeout(async () => {
+      if (input.value.trim().length < 3) return;
+      try {
+        const { results } = await api('taxonomy?q=' + encodeURIComponent(input.value));
+        const sel = input.closest('.cat').querySelector('select');
+        sel.innerHTML = '<option value="">No category</option>' +
+          results.map(c => `<option value="${esc(c.id)}">${esc(c.fullName)}</option>`).join('');
+        if (results[0]) sel.value = results[0].id;
+      } catch (err) { /* status already shown on 401 */ }
+    }, 400);
+  }
+});
+$('#preview-body').addEventListener('change', e => { if (e.target.classList.contains('pick')) updateCount(); });
+$('#check-all').addEventListener('change', e => {
+  document.querySelectorAll('.pick').forEach(c => { c.checked = e.target.checked; });
+  updateCount();
+});
+function updateCount() {
+  const n = document.querySelectorAll('.pick:checked').length;
+  $('#create-count').textContent = n ? `${n} selected` : 'Nothing selected';
+  $('#create-btn').disabled = !n;
+}
+
+// ---------- Create ----------
+$('#create-btn').addEventListener('click', async () => {
+  const rows = [...document.querySelectorAll('#preview-body tr[data-i]')].filter(tr => tr.querySelector('.pick').checked);
+  const items = rows.map(tr => ({
+    sku: previewData[tr.dataset.i].sku,
+    title: tr.querySelector('.title').value,
+    price: tr.querySelector('.price').value,
+    group: tr.querySelector('.group').value,
+    categoryId: tr.querySelector('.category').value,
+    seoTitle: tr.querySelector('.seo-title').value,
+    seoDescription: tr.querySelector('.seo-desc').value,
+    status: $('#status').value,
+  }));
+  if (!items.length) return;
+  const btn = $('#create-btn'); btn.disabled = true;
+  setStatus('#add-status', `Creating ${items.length} product${items.length > 1 ? 's' : ''} in Shopify…`);
+  try {
+    const { results } = await api('create', { method: 'POST', body: JSON.stringify({ items }) });
+    let ok = 0;
+    results.forEach(r => {
+      const tr = rows.find(row => previewData[row.dataset.i].sku === r.sku);
+      if (!tr) return;
+      const out = tr.querySelector('.result');
+      if (r.ok) {
+        ok++;
+        tr.querySelector('.pick').checked = false;
+        out.className = 'note result ok';
+        out.innerHTML = `Created. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
+          (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
+      } else {
+        out.className = 'note result err';
+        out.textContent = r.error;
+      }
+    });
+    setStatus('#add-status', `Created ${ok} of ${results.length}.`, ok < results.length);
+    updateCount();
+  } catch (e) {
+    setStatus('#add-status', e.message, true);
+  } finally { btn.disabled = false; }
+});
+
+// ---------- Live stock ----------
+$('#load-stock').addEventListener('click', loadStock);
+async function loadStock() {
+  const btn = $('#load-stock'); btn.disabled = true;
+  setStatus('#stock-status', 'Loading Combisteel products from Shopify…');
+  try {
+    const { results } = await api('products');
+    stockRows = results;
+    renderStock();
+    const missing = results.filter(r => !r.group).length;
+    setStatus('#stock-status', `${results.length} products loaded.` + (missing ? ` ${missing} have no shipping group.` : ''), missing > 0);
+  } catch (e) { setStatus('#stock-status', e.message, true); }
+  finally { btn.disabled = false; }
+}
+$('#stock-filter').addEventListener('input', renderStock);
+function renderStock() {
+  const q = $('#stock-filter').value.trim().toLowerCase();
+  const rows = stockRows.filter(r => !q || r.sku.toLowerCase().includes(q) || r.title.toLowerCase().includes(q));
+  $('#stock-wrap').hidden = false;
+  $('#stock-body').innerHTML = rows.map(r => `<tr>
+    <td class="sku">${esc(r.sku)}</td>
+    <td><a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">${esc(r.title)}</a></td>
+    <td>${esc(r.status.charAt(0) + r.status.slice(1).toLowerCase())}</td>
+    <td>${gbp(r.price)}</td>
+    <td><span class="stock-num ${r.stock > 0 ? '' : 'zero'}">${esc(r.stock)}</span></td>
+    <td>${r.group ? esc(r.group) : '<span class="note err">Missing</span>'}
+      ${r.groupSource === 'metafield' ? '<div class="tag">From metafield</div>' : ''}</td>
+  </tr>`).join('') || '<tr><td colspan="6" class="hint">No products match this filter.</td></tr>';
+}
+$('#run-sync').addEventListener('click', async () => {
+  const btn = $('#run-sync'); btn.disabled = true;
+  setStatus('#stock-status', 'Stock sync started. This takes about a minute…');
+  try {
+    await fetch('/sync-stock');
+    setStatus('#stock-status', 'Stock sync finished. Loading fresh numbers…');
+    await loadStock();
+  } catch (e) { setStatus('#stock-status', 'Stock sync failed: ' + e.message, true); }
+  finally { btn.disabled = false; }
+});
+
+function setStatus(sel, msg, isErr) {
+  const el = $(sel); el.textContent = msg; el.classList.toggle('err', !!isErr);
+}
+</script>
+</body>
+</html>
