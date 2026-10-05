@@ -1,5 +1,5 @@
 // importer.js
-// Koolmax product importer: Combisteel SKU -> Shopify product (English, GBP formula price,
+// Koolmax product importer: Combisteel SKU -> Shopify product (English, EUR->GBP formula price,
 // features/specification metafields, SEO, category, stock, shipping group).
 // Mount in index.js:  app.use('/admin', importer.router)
 
@@ -8,14 +8,43 @@ const path = require('path');
 const core = require('./specs-sync');
 
 // ---------- Settings you may want to change ----------
-const PRICE_MARKUP = 0.45;      // +45%
-const PRICE_DISCOUNT = 0.37;    // then -37%
+// Price formula: Combisteel EUR price -> GBP -> minus 47% -> plus 30%
+const PRICE_DISCOUNT = 0.47;    // -47%
+const PRICE_MARKUP = 0.30;      // then +30%
 const CATEGORY_NAME_FIELD = 'name';   // field name on Combisteel object_Category (check in Postman)
 const MAX_SKUS_PER_REQUEST = 50;
 
-function finalPrice(apiPrice) {
-  const p = apiPrice * (1 + PRICE_MARKUP) * (1 - PRICE_DISCOUNT);
-  return Math.round(p * 100) / 100;
+const round2 = n => Math.round(n * 100) / 100;
+
+function finalPrice(apiPriceEur, eurToGbp) {
+  const gbp = apiPriceEur * eurToGbp;
+  return round2(gbp * (1 - PRICE_DISCOUNT) * (1 + PRICE_MARKUP));
+}
+
+// EUR -> GBP rate.
+// If PRICE_EUR_TO_GBP is set in Railway (e.g. 0.86) that fixed rate is used.
+// Otherwise the daily European Central Bank rate is fetched (Frankfurter API, free, no key), cached 12 hours.
+let fxCache = null;
+async function getEurToGbp() {
+  const fixed = parseFloat(process.env.PRICE_EUR_TO_GBP);
+  if (fixed > 0) return { rate: fixed, source: 'Fixed rate (PRICE_EUR_TO_GBP)' };
+  if (fxCache && Date.now() - fxCache.time < 12 * 3600 * 1000) return fxCache;
+  for (const url of [
+    'https://api.frankfurter.dev/v1/latest?base=EUR&symbols=GBP',
+    'https://api.frankfurter.app/latest?from=EUR&to=GBP',
+  ]) {
+    try {
+      const res = await fetch(url);
+      const json = await res.json();
+      const rate = json?.rates?.GBP;
+      if (rate > 0) {
+        fxCache = { rate, source: `ECB rate ${json.date}`, time: Date.now() };
+        return fxCache;
+      }
+    } catch (e) { /* try next */ }
+  }
+  if (fxCache) return fxCache;   // stale rate is better than none
+  throw new Error('EUR to GBP rate unavailable. Set PRICE_EUR_TO_GBP in Railway, for example 0.86');
 }
 
 // Shipping group suggestion from weight / height / model. Always shown for review before saving.
@@ -36,13 +65,13 @@ function suggestGroup({ weight, height, model }) {
 const escapeHtml = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function cleanTitle(node) {
-  const base = (node.description || node.title || '').trim();
+  const base = (node.descriptionEn || node.description || node.title || '').trim();
   const words = base.split(/\s+/).filter(Boolean).map(w => {
     if (/\d/.test(w)) return w.toUpperCase();
     if (/^(GN|LED|LCD|AISI|UK|EU|XL|XXL|HC|BBQ)$/i.test(w)) return w.toUpperCase();
     return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
   }).join(' ').replace(/-([a-z])/g, (m, c) => '-' + c.toUpperCase());
-  return /^combisteel\b/i.test(words) ? words : `Combisteel ${words}`;
+  return words.replace(/^combisteel\s+/i, '');      // product title without brand
 }
 
 function truncate(s, max) {
@@ -63,10 +92,11 @@ function highlights(raw) {
 }
 
 function buildSeo(title, raw) {
-  const seoTitle = truncate(`${title} | Koolmax`, 60);
+  const brandTitle = /^combisteel\b/i.test(title) ? title : `Combisteel ${title}`;
+  const seoTitle = truncate(brandTitle, 60);
   const h = highlights(raw).slice(0, 3);
   const seoDescription = truncate(
-    `Buy the ${title} from Koolmax${h.length ? ' – ' + h.join(', ') : ''}. Commercial catering equipment with UK delivery.`,
+    `Buy the ${brandTitle}${h.length ? ' – ' + h.join(', ') : ''}. Commercial catering equipment with UK delivery.`,
     155
   );
   return { seoTitle, seoDescription };
@@ -75,6 +105,27 @@ function buildSeo(title, raw) {
 function buildDescriptionHtml(title, raw) {
   const h = highlights(raw);
   return `<p>${escapeHtml(title)}${h.length ? ' – ' + escapeHtml(h.join(', ')) : ''}.</p>`;
+}
+
+// Combisteel long description -> safe HTML for Shopify.
+// HTML is kept (minus scripts, styles, iframes and event handlers); plain text gets paragraphs and line breaks.
+function formatLongDescription(text) {
+  if (!text || !String(text).trim()) return null;
+  let s = String(text).trim();
+  if (/<[a-z][\s\S]*>/i.test(s)) {
+    s = s.replace(/<(script|style|iframe|object|embed)[\s\S]*?<\/\1>/gi, '')
+         .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+         .replace(/javascript:/gi, '');
+    return s;
+  }
+  return s.split(/\n\s*\n/)
+    .map(par => `<p>${escapeHtml(par.trim()).replace(/\n/g, '<br>')}</p>`)
+    .join('');
+}
+
+function productDescription(node, title, raw) {
+  const long = formatLongDescription(node.longDescriptionEn);
+  return { html: long || buildDescriptionHtml(title, raw), source: long ? 'combisteel' : 'generated' };
 }
 
 // ---------- Shopify helpers ----------
@@ -173,7 +224,7 @@ async function loadCatalog(skuGroup) {
 }
 
 // ---------- Preview one SKU ----------
-async function previewSku(sku, attrMap, skuGroup) {
+async function previewSku(sku, attrMap, skuGroup, fx) {
   const out = { sku };
   const node = await core.getPimProduct(sku);
   if (!node) return { ...out, error: 'SKU not found in Combisteel PIM' };
@@ -187,12 +238,16 @@ async function previewSku(sku, attrMap, skuGroup) {
   const exists = await findShopifySku(sku);
   const suggested = suggestGroup({ weight, height, model: raw['6074'] });
 
+  const desc = productDescription(node, title, raw);
+
   return {
     ...out,
     exists,
     title,
+    descriptionHtml: desc.html,
+    descriptionSource: desc.source,
     apiPrice: node.price,
-    price: node.price != null ? finalPrice(node.price) : null,
+    price: node.price != null ? finalPrice(node.price, fx.rate) : null,
     stock: node.stock ?? 0,
     weight,
     images: core.imageUrls(node),
@@ -227,7 +282,7 @@ async function createProduct(item, attrMap) {
 
   const product = {
     title,
-    descriptionHtml: buildDescriptionHtml(title, raw),
+    descriptionHtml: (item.descriptionHtml && item.descriptionHtml.trim()) || productDescription(node, title, raw).html,
     vendor: 'Combisteel',
     status: item.status === 'ACTIVE' ? 'ACTIVE' : 'DRAFT',
     seo: { title: item.seoTitle || buildSeo(title, raw).seoTitle, description: item.seoDescription || buildSeo(title, raw).seoDescription },
@@ -310,13 +365,14 @@ function createImporter({ skuGroup = {} } = {}) {
     if (skus.length > MAX_SKUS_PER_REQUEST) return res.status(400).json({ error: `Max ${MAX_SKUS_PER_REQUEST} SKUs at a time` });
     try {
       const attrMap = await core.getAttributeMap();
+      const fx = await getEurToGbp();
       const results = [];
       for (const sku of skus) {
-        try { results.push(await previewSku(sku, attrMap, skuGroup)); }
+        try { results.push(await previewSku(sku, attrMap, skuGroup, fx)); }
         catch (e) { results.push({ sku, error: e.message }); }
         await core.sleep(150);
       }
-      res.json({ results, formula: { markup: PRICE_MARKUP, discount: PRICE_DISCOUNT } });
+      res.json({ results, formula: { rate: fx.rate, source: fx.source, discount: PRICE_DISCOUNT, markup: PRICE_MARKUP } });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
@@ -357,4 +413,4 @@ function createImporter({ skuGroup = {} } = {}) {
   };
 }
 
-module.exports = { createImporter, finalPrice, suggestGroup };
+module.exports = { createImporter, finalPrice, getEurToGbp, suggestGroup };

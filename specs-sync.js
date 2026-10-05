@@ -3,7 +3,7 @@
 //   custom.product_features       (rich text)
 //   custom.product_specification  (rich text)
 
-const COMBISTEEL_URL = 'https://pim.combisteel.com/pimcore-graphql-webservices/Combisteel';
+const COMBISTEEL_URL = process.env.COMBISTEEL_URL || 'https://pim.combisteel.com/pimcore-graphql-webservices/Combisteel';
 const COMBISTEEL_ASSET_BASE = 'https://pim.combisteel.com';
 const FEATURES_KEY = 'product_features';
 const SPEC_KEY = 'product_specification';
@@ -128,7 +128,7 @@ function translateValue(v) {
 async function combisteelQuery(query, variables = {}) {
   const res = await fetch(`${COMBISTEEL_URL}?apikey=${process.env.COMBISTEEL_API_KEY}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-API-Key': process.env.COMBISTEEL_API_KEY },
     body: JSON.stringify({ query, variables }),
   });
   const json = await res.json();
@@ -174,24 +174,48 @@ async function getAttributeMap() {
 }
 
 // ---------- One product from Combisteel ----------
+// English description / longDescription are requested with language: "en".
+// If the endpoint rejects the language argument, the query is retried without it.
+// Price field can be changed without code edits, e.g. COMBISTEEL_PRICE_FIELD = price(currency: "GBP")
+const PRICE_EXPR = process.env.COMBISTEEL_PRICE_FIELD || 'price';
+const PIM_FIELDS = `
+  sku title description price: ${PRICE_EXPR} stock grossWeight width height
+  defaultImage { fullpath }
+  extraImages { image { fullpath } }
+  technicalSpecification {
+    features {
+      ... on csFeatureInput  { name text }
+      ... on csFeatureSelect { name selection }
+    }
+  }`;
+const PIM_LANG_FIELDS = `
+  descriptionEn: description(language: "en")
+  longDescriptionEn: longDescription(language: "en")`;
+const PIM_PLAIN_FIELDS = `
+  longDescription`;
+
+let languageArgSupported = true;
 async function getPimProduct(sku) {
-  const data = await combisteelQuery(`
+  const run = extra => combisteelQuery(`
     query($filter: String) {
       getProductListing(first: 1, filter: $filter) {
-        edges { node {
-          sku title description price stock grossWeight width height
-          defaultImage { fullpath }
-          extraImages { image { fullpath } }
-          technicalSpecification {
-            features {
-              ... on csFeatureInput  { name text }
-              ... on csFeatureSelect { name selection }
-            }
-          }
-        } }
+        edges { node { ${PIM_FIELDS} ${extra} } }
       }
     }`, { filter: JSON.stringify({ sku }) });
-  return data.getProductListing.edges[0]?.node || null;
+
+  let data;
+  if (languageArgSupported) {
+    try { data = await run(PIM_LANG_FIELDS); }
+    catch (e) {
+      console.log('[combisteel] language argument not accepted, using default language:', e.message.slice(0, 200));
+      languageArgSupported = false;
+    }
+  }
+  if (!data) data = await run(PIM_PLAIN_FIELDS);
+
+  const node = data.getProductListing.edges[0]?.node || null;
+  if (node && !languageArgSupported) node.longDescriptionEn = node.longDescription;
+  return node;
 }
 
 // Decode specs -> { features: [[label, value]], specification: [[label, value]], raw: { code: value } }

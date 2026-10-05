@@ -87,10 +87,11 @@
     <span>Koolmax Shopify</span>
   </div>
   <div class="formula" aria-label="Price formula">
-    <div><small>Combisteel price</small><b id="fx-api">£715.00</b></div>
-    <div><small>Plus 45%</small><b id="fx-up">£1,036.75</b></div>
-    <div><small>Minus 37%</small><b id="fx-down">£653.15</b></div>
-    <div><small>Shopify price</small><b id="fx-final">£653.15</b></div>
+    <div><small>Combisteel price</small><b id="fx-api">€ –</b></div>
+    <div><small id="fx-rate-label">In GBP</small><b id="fx-gbp">£ –</b></div>
+    <div><small>Minus 47%</small><b id="fx-down">£ –</b></div>
+    <div><small>Plus 30%</small><b id="fx-up">£ –</b></div>
+    <div><small>Shopify price</small><b id="fx-final">£ –</b></div>
   </div>
   <nav role="tablist">
     <button role="tab" aria-selected="true" data-tab="add">Add products</button>
@@ -179,6 +180,7 @@ let stockRows = [];
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const gbp = n => n == null ? '–' : '£' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const eur = n => n == null ? '–' : '€' + Number(n).toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 async function api(path, opts = {}) {
   const res = await fetch(BASE + 'api/' + path, {
@@ -213,12 +215,18 @@ function selectTab(name) {
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { if (key) selectTab(b.dataset.tab); }));
 
 // ---------- Formula strip ----------
+let formula = null;
 function showFormula(apiPrice) {
-  const up = apiPrice * 1.45, down = up * 0.63;
-  $('#fx-api').textContent = gbp(apiPrice);
-  $('#fx-up').textContent = gbp(up);
+  if (!formula) return;
+  const inGbp = apiPrice * formula.rate;
+  const down = inGbp * (1 - formula.discount);
+  const up = down * (1 + formula.markup);
+  $('#fx-api').textContent = eur(apiPrice);
+  $('#fx-rate-label').textContent = `In GBP (× ${formula.rate}, ${formula.source})`;
+  $('#fx-gbp').textContent = gbp(inGbp);
   $('#fx-down').textContent = gbp(down);
-  $('#fx-final').textContent = gbp(Math.round(down * 100) / 100);
+  $('#fx-up').textContent = gbp(up);
+  $('#fx-final').textContent = gbp(Math.round(up * 100) / 100);
 }
 
 // ---------- Preview ----------
@@ -228,7 +236,9 @@ $('#preview-btn').addEventListener('click', async () => {
   const btn = $('#preview-btn'); btn.disabled = true;
   setStatus('#add-status', `Fetching ${skus.length} product${skus.length > 1 ? 's' : ''} from Combisteel…`);
   try {
-    const { results } = await api('preview', { method: 'POST', body: JSON.stringify({ skus }) });
+    const data = await api('preview', { method: 'POST', body: JSON.stringify({ skus }) });
+    const results = data.results;
+    formula = data.formula;
     previewData = results;
     renderPreview();
     const ready = results.filter(r => !r.error && !r.exists).length;
@@ -261,7 +271,7 @@ function renderPreview() {
       <td><div class="sku">${esc(r.sku)}</div>${r.pimCategory ? `<div class="tag">${esc(r.pimCategory)}</div>` : ''}</td>
       <td><input type="text" class="title" value="${esc(r.title)}" aria-label="Title"></td>
       <td><input type="number" step="0.01" min="0" class="price" value="${r.price ?? ''}" aria-label="Price">
-        <div class="note">${r.apiPrice != null ? 'From ' + gbp(r.apiPrice) : '<span class="err">No price in API</span>'}</div></td>
+        <div class="note">${r.apiPrice != null ? 'From ' + eur(r.apiPrice) + ' (Combisteel EUR)' : '<span class="err">No price in API</span>'}</div></td>
       <td><span class="stock-num ${r.stock ? '' : 'zero'}">${esc(r.stock)}</span></td>
       <td><select class="group" aria-label="Shipping group">
           <option value="">None</option>
@@ -273,10 +283,14 @@ function renderPreview() {
           </select>
           <input type="search" class="cat-search" placeholder="Search categories" aria-label="Search categories">
         </div></td>
-      <td><details><summary>SEO, ${r.features.length} features, ${r.specification.length} specs</summary>
+      <td><details><summary>Description, SEO, ${r.features.length} features, ${r.specification.length} specs</summary>
           <div class="seo">
             <label class="field">Meta title <input type="text" class="seo-title" maxlength="70" value="${esc(r.seoTitle)}"></label>
             <label class="field">Meta description <textarea class="seo-desc" maxlength="320" style="min-height:70px;width:100%">${esc(r.seoDescription)}</textarea></label>
+            <label class="field">Description (HTML)
+              <textarea class="desc" style="min-height:140px;width:100%">${esc(r.descriptionHtml)}</textarea>
+              <span class="hint">${r.descriptionSource === 'combisteel' ? 'Long description from Combisteel (English)' : 'No long description in Combisteel, short description generated from specs'}</span>
+            </label>
           </div>
           <ul>${r.features.map(([l, v]) => `<li>${esc(v === 'Yes' ? l : l + ': ' + v)}</li>`).join('')}</ul>
           <ul>${r.specification.map(([l, v]) => `<li>${esc(l)}: ${esc(v)}</li>`).join('')}</ul>
@@ -327,6 +341,7 @@ $('#create-btn').addEventListener('click', async () => {
     categoryId: tr.querySelector('.category').value,
     seoTitle: tr.querySelector('.seo-title').value,
     seoDescription: tr.querySelector('.seo-desc').value,
+    descriptionHtml: tr.querySelector('.desc').value,
     status: $('#status').value,
   }));
   if (!items.length) return;
