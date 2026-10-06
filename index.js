@@ -9,7 +9,7 @@ app.use(bodyParser.json());
 // CONFIG
 // ─────────────────────────────────────────────────────────────
 const COMBISTEEL_URL     = 'https://pim.combisteel.com/pimcore-graphql-webservices/Combisteel';
-const COMBISTEEL_API_KEY = process.env.COMBISTEEL_API_KEY || 'feed23626ace249b399514a2fc4396187b27';
+const COMBISTEEL_API_KEY = process.env.COMBISTEEL_API_KEY || '';   // set in Railway, never in code
 const SHOPIFY_STORE      = process.env.SHOPIFY_STORE_URL    || '';
 const SHOPIFY_TOKEN      = process.env.SHOPIFY_ACCESS_TOKEN || '';
 const SHOPIFY_VERSION    = process.env.SHOPIFY_API_VERSION  || '2025-01';
@@ -325,15 +325,14 @@ function getCombisteelSkus() {
 
 // ─────────────────────────────────────────────────────────────
 // STEP 1 — Build Shopify SKU → inventoryItemId map
+//   Maps EVERY vendor:Combisteel product in Shopify, so products created
+//   from the dashboard (not in SKU_GROUP) are stock-synced as well.
 // ─────────────────────────────────────────────────────────────
-async function buildShopifySkuMap(targetSkus) {
+async function buildShopifySkuMap() {
   const skuMap = {};
-  const skuSet = new Set(targetSkus);
   let cursor   = null;
   let hasNext  = true;
   let page     = 0;
-
-  console.log(`[Shopify] Building SKU map for ${targetSkus.length} target SKUs...`);
 
   while (hasNext) {
     page++;
@@ -343,14 +342,8 @@ async function buildShopifySkuMap(targetSkus) {
         pageInfo { hasNextPage endCursor }
         edges {
           node {
-            title
             variants(first: 10) {
-              edges {
-                node {
-                  sku
-                  inventoryItem { id }
-                }
-              }
+              edges { node { sku inventoryItem { id } } }
             }
           }
         }
@@ -358,78 +351,94 @@ async function buildShopifySkuMap(targetSkus) {
     }`;
 
     const data = await shopifyGraphQL(query);
-
     if (!data?.data?.products) {
-      console.error(`[Shopify] Bad response page ${page}:`, JSON.stringify(data).substring(0,200));
-      break;
+      throw new Error(`Shopify bad response on page ${page}: ${JSON.stringify(data).substring(0, 200)}`);
     }
 
     const { edges, pageInfo } = data.data.products;
-    console.log(`[Shopify] Page ${page}: ${edges.length} products`);
-
     for (const productEdge of edges) {
       for (const variantEdge of productEdge.node.variants.edges) {
         const sku = (variantEdge.node.sku || '').trim();
-        if (skuSet.has(sku) && variantEdge.node.inventoryItem?.id) {
-          skuMap[sku] = variantEdge.node.inventoryItem.id;
-          console.log(`[Shopify] ✅ Mapped: ${sku}`);
-        }
+        if (sku && variantEdge.node.inventoryItem?.id) skuMap[sku] = variantEdge.node.inventoryItem.id;
       }
     }
-
     hasNext = pageInfo.hasNextPage;
     cursor  = pageInfo.endCursor;
     await delay(300);
   }
 
-  console.log(`[Shopify] Map complete — ${Object.keys(skuMap).length} / ${targetSkus.length} found`);
+  console.log(`[Shopify] ${Object.keys(skuMap).length} Combisteel SKUs in Shopify`);
   return skuMap;
 }
 
 // ─────────────────────────────────────────────────────────────
-// STEP 2 — Fetch stock from Combisteel (target SKUs only)
+// STEP 2 — Fetch stock from Combisteel
+//   FULL:        all ~3,100 PIM products (stops early once all our SKUs are found)
+//   INCREMENTAL: only products changed since the last sync (o_modificationDate)
+//   A FULL sync runs on server start and once a day after FULL_SYNC_HOUR (UK time);
+//   the hourly runs in between are INCREMENTAL.
 // ─────────────────────────────────────────────────────────────
-async function fetchCombisteelStock(targetSkus) {
-  const skuSet   = new Set(targetSkus);
-  const matched  = [];
-  let after      = 0;
-  const pageSize = 1000;
+const FULL_SYNC_HOUR   = parseInt(process.env.FULL_SYNC_HOUR, 10) || 3;
+const OVERLAP_SECONDS  = 15 * 60;          // re-read 15 min before the last sync, nothing slips through
+let lastSyncUnix       = null;             // in memory: a restart triggers a full sync
+let lastFullSyncDay    = null;
 
-  console.log(`[Combisteel] Fetching stock for ${targetSkus.length} target SKUs...`);
+function ukNow() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', hourCycle: 'h23',
+  }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { day: `${p.year}-${p.month}-${p.day}`, hour: parseInt(p.hour, 10) };
+}
+
+function chooseSyncMode(force) {
+  if (force === 'full' || force === 'incremental') return force;
+  const { day, hour } = ukNow();
+  if (lastSyncUnix == null) return 'full';
+  if (hour >= FULL_SYNC_HOUR && lastFullSyncDay !== day) return 'full';
+  return 'incremental';
+}
+
+async function fetchCombisteelStock(targetSkus, mode) {
+  const skuSet   = new Set(targetSkus);
+  const found    = new Map();
+  const pageSize = 1000;
+  const since    = mode === 'incremental' ? lastSyncUnix - OVERLAP_SECONDS : null;
+  const filter   = since
+    ? `, filter: ${JSON.stringify(JSON.stringify({ o_modificationDate: { $gte: String(since) } }))}`
+    : '';
+  let after = 0;
+
+  console.log(`[Combisteel] ${mode.toUpperCase()} fetch` +
+    (since ? ` (changed since ${new Date(since * 1000).toISOString()})` : '') + ` for ${targetSkus.length} SKUs`);
 
   while (true) {
-    const query = `{ getProductListing(first: ${pageSize}, after: ${after}) { totalCount edges { node { sku stock } } } }`;
+    const query = `{ getProductListing(first: ${pageSize}, after: ${after}${filter}) { totalCount edges { node { sku stock } } } }`;
     const data  = await graphqlRequest(COMBISTEEL_URL, query, {
       'Content-Type': 'application/json',
       'X-API-Key':    COMBISTEEL_API_KEY,
     });
 
     if (!data?.data?.getProductListing) {
-      console.error('[Combisteel] Bad response at offset', after);
-      break;
+      // Throw instead of returning a partial list, so lastSyncUnix is not moved forward
+      throw new Error(`Combisteel bad response at offset ${after}: ${JSON.stringify(data).substring(0, 200)}`);
     }
 
     const { edges, totalCount } = data.data.getProductListing;
-
     for (const edge of edges) {
       const sku = (edge.node.sku || '').trim();
-      if (skuSet.has(sku)) {
-        matched.push({ sku, quantity: parseInt(edge.node.stock, 10) || 0 });
+      if (skuSet.has(sku) && edge.node.stock != null) {
+        found.set(sku, parseInt(edge.node.stock, 10) || 0);
       }
     }
 
     const fetched = after + edges.length;
-    console.log(`[Combisteel] Scanned ${fetched}/${totalCount} — matched ${matched.length}`);
-
-    if (matched.length === targetSkus.length) {
-      console.log('[Combisteel] All target SKUs found — stopping early');
-      break;
-    }
-    if (fetched >= totalCount) break;
+    console.log(`[Combisteel] Scanned ${fetched}/${totalCount}, ours: ${found.size}`);
+    if (found.size === targetSkus.length) break;          // all found, stop early
+    if (!edges.length || fetched >= totalCount) break;
     after += pageSize;
   }
 
-  return matched;
+  return [...found].map(([sku, quantity]) => ({ sku, quantity }));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -464,24 +473,27 @@ async function updateShopifyStock(inventoryItemId, quantity) {
 }
 // ─────────────────────────────────────────────────────────────
 // MAIN SYNC
+//   Only products returned by Step 2 are updated. In INCREMENTAL mode that is
+//   only the changed ones; everything else keeps its current Shopify stock.
 // ─────────────────────────────────────────────────────────────
-async function runCombisteelStockSync() {
-  console.log(`\n[${new Date().toISOString()}] ════ Sync Start ════`);
-  let updated=0, skipped=0, errors=0;
+let syncRunning = false;
+
+async function runCombisteelStockSync(force) {
+  if (syncRunning) { console.log('[Sync] Already running, skipped'); return; }
+  syncRunning = true;
+  const startedUnix = Math.floor(Date.now() / 1000);
+  const mode = chooseSyncMode(force);
+  console.log(`\n[${new Date().toISOString()}] ════ Sync Start (${mode}) ════`);
+  let updated = 0, errors = 0;
 
   try {
-    const targetSkus = getCombisteelSkus();
-    console.log(`[Sync] ${targetSkus.length} target SKUs`);
-
-    const skuMap   = await buildShopifySkuMap(targetSkus);
-    const products = await fetchCombisteelStock(targetSkus);
+    const skuMap     = await buildShopifySkuMap();
+    const targetSkus = Object.keys(skuMap);
+    const products   = await fetchCombisteelStock(targetSkus, mode);
 
     for (const product of products) {
       try {
-        const invId = skuMap[product.sku];
-        if (!invId) { skipped++; continue; }
-
-        const ok = await updateShopifyStock(invId, product.quantity);
+        const ok = await updateShopifyStock(skuMap[product.sku], product.quantity);
         if (ok) { console.log(`✅ ${product.sku} → qty:${product.quantity}`); updated++; }
         else    { console.log(`❌ ${product.sku} → failed`); errors++; }
         await delay(300);
@@ -491,20 +503,32 @@ async function runCombisteelStockSync() {
       }
     }
 
-    console.log(`\n[${new Date().toISOString()}] ════ Sync Done ════`);
-    console.log(`✅ Updated:${updated} | ⏭ Skipped:${skipped} | ❌ Errors:${errors}\n`);
+    // Only move the checkpoint forward when the whole run succeeded
+    lastSyncUnix = startedUnix;
+    if (mode === 'full') {
+      lastFullSyncDay = ukNow().day;
+      const missing = targetSkus.filter(s => !products.some(p => p.sku === s));
+      if (missing.length) console.log(`[Sync] Not in Combisteel PIM (manage manually): ${missing.join(', ')}`);
+    }
 
+    console.log(`[${new Date().toISOString()}] ════ Sync Done (${mode}) ════`);
+    console.log(`✅ Updated:${updated} | ❌ Errors:${errors}\n`);
   } catch (err) {
     console.error('[Sync] Fatal error:', err.message);
+  } finally {
+    syncRunning = false;
   }
 }
 
 // ─────────────────────────────────────────────────────────────
 // MANUAL SYNC TRIGGER
 // ─────────────────────────────────────────────────────────────
+// /sync-stock              → automatic mode (full or incremental)
+// /sync-stock?mode=full    → force a full sync
 app.get('/sync-stock', async (req, res) => {
-  res.json({ message:'Sync started — check Railway logs', skus: getCombisteelSkus() });
-  runCombisteelStockSync();
+  const force = ['full', 'incremental'].includes(req.query.mode) ? req.query.mode : undefined;
+  res.json({ message: `Sync started (${chooseSyncMode(force)}) — check Railway logs`, running: syncRunning });
+  runCombisteelStockSync(force);
 });
 
 // ─────────────────────────────────────────────────────────────
