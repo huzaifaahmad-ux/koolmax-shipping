@@ -12,7 +12,20 @@
 //   IMAGE_MAX_KB  default 100
 //   IMAGE_SIZE    default 1000 (px, width and height)
 
-const sharp = require('sharp');
+// sharp is loaded lazily: if it is missing or can't run on this server, the app keeps
+// running and products simply get the original Combisteel images.
+let sharpLib = null;
+let sharpError = null;
+function getSharp() {
+  if (sharpLib || sharpError) return sharpLib;
+  try { sharpLib = require('sharp'); }
+  catch (e) {
+    sharpError = e;
+    console.log('[images] sharp not available, images will not be converted:', e.message.split('\n')[0]);
+  }
+  return sharpLib;
+}
+const sharp = (...args) => getSharp()(...args);
 const core = require('./specs-sync');
 
 const MIN_BYTES = (parseInt(process.env.IMAGE_MIN_KB, 10) || 80) * 1024;
@@ -82,6 +95,13 @@ async function stagedUpload(buffer, filename) {
 async function prepareMedia(urls, { alt, baseName }) {
   const media = [];
   const report = [];
+  if (!getSharp()) {
+    for (const url of urls) {
+      media.push({ originalSource: url, mediaContentType: 'IMAGE', alt });
+      report.push({ file: url.split('/').pop(), error: 'image converter (sharp) not installed on the server' });
+    }
+    return { media, report };
+  }
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
     try {

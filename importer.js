@@ -6,8 +6,18 @@
 const express = require('express');
 const path = require('path');
 const core = require('./specs-sync');
-const metaCopy = require('./meta-copy');
-const images = require('./image-optimizer');
+// Optional modules: if a file is missing the dashboard still starts, with simpler fallbacks.
+function optionalRequire(name, fallback) {
+  try { return require(name); }
+  catch (e) { console.log(`[importer] ${name} not loaded, using fallback:`, e.message.split('\n')[0]); return fallback; }
+}
+const metaCopy = optionalRequire('./meta-copy', {
+  templateMetaDescription: title => (/^combisteel\b/i.test(title) ? title : `Combisteel ${title}`) + ' for professional commercial kitchens.',
+  aiMetaDescription: async () => { throw new Error('meta-copy.js is not uploaded'); },
+});
+const images = optionalRequire('./image-optimizer', {
+  prepareMedia: async (urls, { alt }) => ({ media: urls.map(u => ({ originalSource: u, mediaContentType: 'IMAGE', alt })), report: [] }),
+});
 
 // ---------- Settings you may want to change ----------
 // Price formula: Combisteel EUR price -> GBP -> minus 47% -> plus 30%
