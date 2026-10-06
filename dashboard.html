@@ -170,7 +170,7 @@
           <button class="btn" id="preview-btn">Preview products</button>
         </div>
       </div>
-      <p class="hint">One SKU per line or separated by commas. Up to 50 at a time. Nothing is saved until you press Create.</p>
+      <p class="hint">One SKU per line or separated by commas. Up to 50 at a time. Nothing is saved until you press Create. Images are converted to 1000 × 1000 px WebP, 80–100 KB.</p>
       <p id="add-status" class="status"></p>
     </div>
 
@@ -447,8 +447,10 @@ $('#create-btn').addEventListener('click', async () => {
         ok++;
         tr.querySelector('.pick').checked = false;
         out.className = 'note result ok';
+        const imgs = (r.images || []).filter(x => !x.error);
+        const imgNote = imgs.length ? `<div class="note">${imgs.length} image${imgs.length > 1 ? 's' : ''} as 1000×1000 WebP: ${imgs.map(x => `${x.kb} KB`).join(', ')}</div>` : '';
         out.innerHTML = `Created at /products/${esc(r.handle)}. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
-          (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
+          imgNote + (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
       } else {
         out.className = 'note result err';
         out.textContent = r.error;

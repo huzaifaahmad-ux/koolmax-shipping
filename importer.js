@@ -7,6 +7,7 @@ const express = require('express');
 const path = require('path');
 const core = require('./specs-sync');
 const metaCopy = require('./meta-copy');
+const images = require('./image-optimizer');
 
 // ---------- Settings you may want to change ----------
 // Price formula: Combisteel EUR price -> GBP -> minus 47% -> plus 30%
@@ -301,7 +302,11 @@ async function createProduct(item, attrMap) {
   };
   if (item.categoryId) product.category = item.categoryId;
 
-  const media = core.imageUrls(node).map(url => ({ originalSource: url, mediaContentType: 'IMAGE', alt: title }));
+  // Images: download, convert to WebP under the size limit, upload to Shopify
+  const { media, report: imageReport } = await images.prepareMedia(core.imageUrls(node), {
+    alt: title,
+    baseName: product.handle || slugify(title),
+  });
 
   // 1. Product
   const createQuery = `
@@ -314,6 +319,11 @@ async function createProduct(item, attrMap) {
   let created = await core.shopifyQuery(createQuery, { product, media });
   // If the URL is already used by another product, let Shopify pick a free one (adds -1, -2 ...)
   const warnings = [];
+  for (const im of imageReport) {
+    if (im.error) warnings.push(`Image ${im.file} not converted (${im.error}), original used`);
+    else if (im.reason === 'over max') warnings.push(`Image ${im.file} is ${im.kb} KB, could not get under the maximum`);
+    else if (im.reason === 'under min') warnings.push(`Image ${im.file} is ${im.kb} KB at maximum quality (simple image, cannot reach the minimum)`);
+  }
   if (created.productCreate.userErrors.some(e => /handle/i.test(e.message + (e.field || '')))) {
     warnings.push(`URL "${product.handle}" was taken, Shopify picked another one`);
     delete product.handle;
@@ -357,7 +367,7 @@ async function createProduct(item, attrMap) {
   if (item.group) dynamicGroups[sku] = item.group;
 
   return {
-    sku, ok: true, title, handle: pc.product.handle, price, stock: node.stock ?? 0, group: item.group || null,
+    sku, ok: true, title, handle: pc.product.handle, images: imageReport, price, stock: node.stock ?? 0, group: item.group || null,
     adminUrl: `${storeAdmin()}/products/${numericId(productId)}`, warnings,
   };
 }
