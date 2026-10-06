@@ -6,6 +6,7 @@
 const express = require('express');
 const path = require('path');
 const core = require('./specs-sync');
+const metaCopy = require('./meta-copy');
 
 // ---------- Settings you may want to change ----------
 // Price formula: Combisteel EUR price -> GBP -> minus 47% -> plus 30%
@@ -91,15 +92,24 @@ function highlights(raw) {
   return out;
 }
 
-function buildSeo(title, raw) {
+// URL handle from the meta title: "Combisteel Base 600 Electric Bain-Marie" -> "combisteel-base-600-electric-bain-marie"
+function slugify(text) {
+  return String(text || '')
+    .normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/(\d)\/(\d)/g, '$1-$2')          // 1/2GN -> 1-2gn
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 255)
+    .replace(/-+$/, '');
+}
+
+function buildSeo(title, raw, seed = title) {
   const brandTitle = /^combisteel\b/i.test(title) ? title : `Combisteel ${title}`;
   const seoTitle = truncate(brandTitle, 60);
-  const h = highlights(raw).slice(0, 3);
-  const seoDescription = truncate(
-    `Buy the ${brandTitle}${h.length ? ' – ' + h.join(', ') : ''}. Commercial catering equipment with UK delivery.`,
-    155
-  );
-  return { seoTitle, seoDescription };
+  const seoDescription = metaCopy.templateMetaDescription(title, raw, seed);
+  return { seoTitle, seoDescription, handle: slugify(seoTitle) };
 }
 
 function buildDescriptionHtml(title, raw) {
@@ -256,7 +266,7 @@ async function previewSku(sku, attrMap, skuGroup, fx) {
     categoryId: categoryOptions[0]?.id || null,
     group: skuGroup[sku] || suggested,
     groupSource: skuGroup[sku] ? 'code' : (suggested ? 'suggested' : 'none'),
-    ...buildSeo(title, raw),
+    ...buildSeo(title, raw, sku),
     features,
     specification,
   };
@@ -285,7 +295,8 @@ async function createProduct(item, attrMap) {
     descriptionHtml: (item.descriptionHtml && item.descriptionHtml.trim()) || productDescription(node, title, raw).html,
     vendor: 'Combisteel',
     status: item.status === 'ACTIVE' ? 'ACTIVE' : 'DRAFT',
-    seo: { title: item.seoTitle || buildSeo(title, raw).seoTitle, description: item.seoDescription || buildSeo(title, raw).seoDescription },
+    handle: slugify(item.handle || item.seoTitle || buildSeo(title, raw, sku).seoTitle),
+    seo: { title: item.seoTitle || buildSeo(title, raw, sku).seoTitle, description: item.seoDescription || buildSeo(title, raw, sku).seoDescription },
     metafields,
   };
   if (item.categoryId) product.category = item.categoryId;
@@ -293,18 +304,25 @@ async function createProduct(item, attrMap) {
   const media = core.imageUrls(node).map(url => ({ originalSource: url, mediaContentType: 'IMAGE', alt: title }));
 
   // 1. Product
-  const created = await core.shopifyQuery(`
+  const createQuery = `
     mutation($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
       productCreate(product: $product, media: $media) {
-        product { id variants(first: 1) { nodes { id inventoryItem { id } } } }
+        product { id handle variants(first: 1) { nodes { id inventoryItem { id } } } }
         userErrors { field message }
       }
-    }`, { product, media });
+    }`;
+  let created = await core.shopifyQuery(createQuery, { product, media });
+  // If the URL is already used by another product, let Shopify pick a free one (adds -1, -2 ...)
+  const warnings = [];
+  if (created.productCreate.userErrors.some(e => /handle/i.test(e.message + (e.field || '')))) {
+    warnings.push(`URL "${product.handle}" was taken, Shopify picked another one`);
+    delete product.handle;
+    created = await core.shopifyQuery(createQuery, { product, media });
+  }
   const pc = created.productCreate;
   if (pc.userErrors.length) return { sku, error: 'Create failed: ' + pc.userErrors.map(e => e.message).join('; ') };
   const productId = pc.product.id;
   const variant = pc.product.variants.nodes[0];
-  const warnings = [];
 
   // 2. SKU + price
   const upd = await core.shopifyQuery(`
@@ -339,7 +357,7 @@ async function createProduct(item, attrMap) {
   if (item.group) dynamicGroups[sku] = item.group;
 
   return {
-    sku, ok: true, title, price, stock: node.stock ?? 0, group: item.group || null,
+    sku, ok: true, title, handle: pc.product.handle, price, stock: node.stock ?? 0, group: item.group || null,
     adminUrl: `${storeAdmin()}/products/${numericId(productId)}`, warnings,
   };
 }
@@ -391,6 +409,22 @@ function createImporter({ skuGroup = {} } = {}) {
       }
       console.log('[importer] Created:', results.filter(r => r.ok).map(r => r.sku));
       res.json({ results });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Optional: rewrite one meta description with the Claude API, in the copywriter's style
+  router.post('/api/meta-ai', async (req, res) => {
+    const sku = String(req.body.sku || '').trim();
+    const title = String(req.body.title || '').trim();
+    if (!sku || !title) return res.status(400).json({ error: 'SKU and title are required' });
+    try {
+      const attrMap = await core.getAttributeMap();
+      const node = await core.getPimProduct(sku);
+      if (!node) return res.status(404).json({ error: 'SKU not found in Combisteel PIM' });
+      const { specification } = core.decodeSpecs(node, attrMap);
+      res.json({ seoDescription: await metaCopy.aiMetaDescription(title, {}, specification) });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }

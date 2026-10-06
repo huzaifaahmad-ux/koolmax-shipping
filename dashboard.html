@@ -286,7 +286,13 @@ function renderPreview() {
       <td><details><summary>Description, SEO, ${r.features.length} features, ${r.specification.length} specs</summary>
           <div class="seo">
             <label class="field">Meta title <input type="text" class="seo-title" maxlength="70" value="${esc(r.seoTitle)}"></label>
+            <label class="field">URL handle <input type="text" class="handle" value="${esc(r.handle)}">
+              <span class="hint">/products/<span class="handle-preview">${esc(r.handle)}</span> · follows the meta title</span></label>
             <label class="field">Meta description <textarea class="seo-desc" maxlength="320" style="min-height:70px;width:100%">${esc(r.seoDescription)}</textarea></label>
+            <div class="row" style="gap:10px;align-items:center">
+              <span class="hint seo-count">${r.seoDescription.length} / 158 characters</span>
+              <button type="button" class="btn secondary ai-meta" style="padding:6px 12px">Rewrite with AI</button>
+            </div>
             <label class="field">Description (HTML)
               <textarea class="desc" style="min-height:140px;width:100%">${esc(r.descriptionHtml)}</textarea>
               <span class="hint">${r.descriptionSource === 'combisteel' ? 'Long description from Combisteel (English)' : 'No long description in Combisteel, short description generated from specs'}</span>
@@ -320,6 +326,41 @@ $('#preview-body').addEventListener('input', e => {
   }
 });
 $('#preview-body').addEventListener('change', e => { if (e.target.classList.contains('pick')) updateCount(); });
+
+// Meta description: live character count + optional AI rewrite
+function updateSeoCount(tr) {
+  const len = tr.querySelector('.seo-desc').value.length;
+  const el = tr.querySelector('.seo-count');
+  el.textContent = `${len} / 158 characters`;
+  el.style.color = len > 158 ? 'var(--err)' : '';
+}
+const slugify = t => String(t || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/(\d)\/(\d)/g, '$1-$2').replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+$('#preview-body').addEventListener('input', e => {
+  const tr = e.target.closest('tr');
+  if (e.target.classList.contains('seo-title')) {
+    tr.querySelector('.handle').value = slugify(e.target.value);
+    tr.querySelector('.handle-preview').textContent = slugify(e.target.value);
+  }
+  if (e.target.classList.contains('handle')) tr.querySelector('.handle-preview').textContent = slugify(e.target.value);
+});
+$('#preview-body').addEventListener('input', e => {
+  if (e.target.classList.contains('seo-desc')) updateSeoCount(e.target.closest('tr'));
+});
+$('#preview-body').addEventListener('click', async e => {
+  const btn = e.target.closest('.ai-meta');
+  if (!btn) return;
+  const tr = btn.closest('tr');
+  const r = previewData[tr.dataset.i];
+  btn.disabled = true; btn.textContent = 'Writing…';
+  try {
+    const data = await api('meta-ai', { method: 'POST', body: JSON.stringify({ sku: r.sku, title: tr.querySelector('.title').value }) });
+    tr.querySelector('.seo-desc').value = data.seoDescription;
+    updateSeoCount(tr);
+  } catch (err) {
+    setStatus('#add-status', 'AI rewrite failed: ' + err.message, true);
+  } finally { btn.disabled = false; btn.textContent = 'Rewrite with AI'; }
+});
 $('#check-all').addEventListener('change', e => {
   document.querySelectorAll('.pick').forEach(c => { c.checked = e.target.checked; });
   updateCount();
@@ -340,6 +381,7 @@ $('#create-btn').addEventListener('click', async () => {
     group: tr.querySelector('.group').value,
     categoryId: tr.querySelector('.category').value,
     seoTitle: tr.querySelector('.seo-title').value,
+    handle: tr.querySelector('.handle').value,
     seoDescription: tr.querySelector('.seo-desc').value,
     descriptionHtml: tr.querySelector('.desc').value,
     status: $('#status').value,
@@ -358,7 +400,7 @@ $('#create-btn').addEventListener('click', async () => {
         ok++;
         tr.querySelector('.pick').checked = false;
         out.className = 'note result ok';
-        out.innerHTML = `Created. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
+        out.innerHTML = `Created at /products/${esc(r.handle)}. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
           (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
       } else {
         out.className = 'note result err';
