@@ -98,6 +98,23 @@
     background: var(--green-soft); color: var(--green-d); }
   .stock-num.zero { background: var(--err-soft); color: var(--err); }
 
+  /* ---------- batch progress ---------- */
+  .progress { display: grid; gap: 8px; }
+  .progress-top { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; font-weight: 600; }
+  .bar { height: 12px; background: #EDF1F5; border-radius: 99px; overflow: hidden; display: flex; }
+  .bar span { display: block; height: 100%; transition: width .4s ease; }
+  .bar .b-ok { background: var(--green); } .bar .b-skip { background: #F0B44C; } .bar .b-err { background: var(--err); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .legend i { display: inline-block; width: 9px; height: 9px; border-radius: 3px; margin-right: 5px; vertical-align: 0; }
+  .state { display: inline-block; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 99px; margin-top: 6px; }
+  .state.queued { background: #EEF1F4; color: var(--muted); }
+  .state.running { background: var(--blue-soft); color: var(--blue-d); }
+  .state.running::before { content: ''; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%;
+    border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; vertical-align: -1px; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .state.running::before { animation: none; } .bar span { transition: none; } }
+  tr.is-running td { background: #F7FBFE; }
+
   .login { max-width: 400px; margin: 60px auto; }
   .login h2 { margin: 0 0 6px; }
 
@@ -170,7 +187,7 @@
           <button class="btn" id="preview-btn">Preview products</button>
         </div>
       </div>
-      <p class="hint">One SKU per line or separated by commas. Up to 50 at a time. Nothing is saved until you press Create. Images are converted to 1000 × 1000 px WebP, 80–100 KB.</p>
+      <p class="hint">One SKU per line or separated by commas. Up to 100 at a time. Nothing is saved until you press Create. Images are converted to 1000 × 1000 px WebP, 80–100 KB.</p>
       <p id="add-status" class="status"></p>
     </div>
 
@@ -188,6 +205,20 @@
       <div class="row" style="align-items:center">
         <button class="btn go" id="create-btn">Create selected products</button>
         <span class="hint" id="create-count"></span>
+      </div>
+      <div class="panel progress" id="job-panel" hidden aria-live="polite">
+        <div class="progress-top"><span id="job-title">Creating products</span><span id="job-count"></span></div>
+        <div class="bar" role="progressbar" aria-valuemin="0" id="job-bar">
+          <span class="b-ok" id="bar-ok" style="width:0"></span><span class="b-skip" id="bar-skip" style="width:0"></span><span class="b-err" id="bar-err" style="width:0"></span>
+        </div>
+        <div class="legend">
+          <span><i style="background:var(--green)"></i><b id="n-done">0</b> created</span>
+          <span><i style="background:#F0B44C"></i><b id="n-skipped">0</b> skipped</span>
+          <span><i style="background:var(--err)"></i><b id="n-failed">0</b> failed</span>
+          <span id="job-eta"></span>
+        </div>
+        <p class="hint" style="margin:0">Runs on the server: you can leave this page and come back, progress is kept.</p>
+        <div id="job-orphans" class="note"></div>
       </div>
     </div>
   </section>
@@ -248,8 +279,9 @@ $('#login-form').addEventListener('submit', e => {
   key = $('#pw').value;
   try { sessionStorage.setItem('kx-key', key); } catch (err) {}
   $('#login').hidden = true; selectTab('add');
+  resumeJob();
 });
-if (!key) showLogin();
+if (!key) showLogin(); else resumeJob();
 
 // ---------- Tabs ----------
 function selectTab(name) {
@@ -277,15 +309,37 @@ function showFormula(apiPrice) {
 }
 
 // ---------- Preview ----------
+const PREVIEW_CHUNK = 5;      // SKUs per request
+const PREVIEW_PARALLEL = 2;   // requests at the same time
+const MAX_PREVIEW = 100;
 $('#preview-btn').addEventListener('click', async () => {
-  const skus = $('#skus').value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+  const skus = [...new Set($('#skus').value.split(/[\s,;]+/).map(s => s.trim()).filter(Boolean))];
   if (!skus.length) { setStatus('#add-status', 'Add at least one SKU.', true); return; }
+  if (skus.length > MAX_PREVIEW) { setStatus('#add-status', `Up to ${MAX_PREVIEW} SKUs at a time (you entered ${skus.length}).`, true); return; }
   const btn = $('#preview-btn'); btn.disabled = true;
-  setStatus('#add-status', `Fetching ${skus.length} product${skus.length > 1 ? 's' : ''} from Combisteel…`);
+  const chunks = [];
+  for (let i = 0; i < skus.length; i += PREVIEW_CHUNK) chunks.push(skus.slice(i, i + PREVIEW_CHUNK));
+  const out = new Array(chunks.length);
+  let fetched = 0, nextChunk = 0;
+  const progress = () => setStatus('#add-status', `Fetching from Combisteel… ${fetched} of ${skus.length}`);
+  progress();
   try {
-    const data = await api('preview', { method: 'POST', body: JSON.stringify({ skus }) });
-    const results = data.results;
-    formula = data.formula;
+    const worker = async () => {
+      while (nextChunk < chunks.length) {
+        const c = nextChunk++;
+        try {
+          const data = await api('preview', { method: 'POST', body: JSON.stringify({ skus: chunks[c] }) });
+          out[c] = data.results;
+          if (data.formula) formula = data.formula;
+        } catch (e) {
+          if (e.message === 'Wrong password') throw e;
+          out[c] = chunks[c].map(sku => ({ sku, error: 'Could not load: ' + e.message }));
+        }
+        fetched += chunks[c].length; progress();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(PREVIEW_PARALLEL, chunks.length) }, worker));
+    const results = out.flat();
     previewData = results;
     renderPreview();
     const ready = results.filter(r => !r.error && !r.exists).length;
@@ -418,8 +472,126 @@ function updateCount() {
   $('#create-btn').disabled = !n;
 }
 
-// ---------- Create ----------
+// ---------- Create (background job on the server) ----------
+const STATE_LABEL = { queued: 'Waiting', running: 'Creating…', done: 'Created', failed: 'Failed', skipped: 'Skipped' };
+let jobId = null, jobSince = 0, pollTimer = null, pollErrors = 0, jobStart = 0;
+
+function rowFor(sku) {
+  return [...document.querySelectorAll('#preview-body tr[data-i]')].find(tr => previewData[tr.dataset.i]?.sku === sku);
+}
+
+function showRowState(sku, state, r, attempt) {
+  const tr = rowFor(sku);
+  if (!tr) return false;
+  const out = tr.querySelector('.result');
+  tr.classList.toggle('is-running', state === 'running');
+  if (state === 'queued' || state === 'running') {
+    out.className = 'note result';
+    out.innerHTML = `<span class="state ${state}">${STATE_LABEL[state]}${attempt > 1 ? ` (try ${attempt})` : ''}</span>`;
+    return true;
+  }
+  if (state === 'done' && r?.ok) {
+    tr.querySelector('.pick').checked = false;
+    out.className = 'note result ok';
+    const imgs = (r.images || []).filter(x => !x.error);
+    const imgNote = imgs.length ? `<div class="note">${imgs.length} image${imgs.length > 1 ? 's' : ''} as 1000×1000 WebP: ${imgs.map(x => `${x.kb} KB`).join(', ')}</div>` : '';
+    out.innerHTML = `Created at /products/${esc(r.handle)}. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
+      imgNote + (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
+  } else {
+    if (state === 'skipped') tr.querySelector('.pick').checked = false;
+    out.className = 'note result ' + (state === 'skipped' ? 'warn' : 'err');
+    out.textContent = r?.error || STATE_LABEL[state];
+  }
+  return true;
+}
+
+function renderJob(job) {
+  $('#job-panel').hidden = false;
+  const pct = n => (job.total ? (n / job.total) * 100 : 0) + '%';
+  $('#bar-ok').style.width = pct(job.counts.done);
+  $('#bar-skip').style.width = pct(job.counts.skipped);
+  $('#bar-err').style.width = pct(job.counts.failed);
+  $('#job-bar').setAttribute('aria-valuemax', job.total);
+  $('#job-bar').setAttribute('aria-valuenow', job.finished);
+  $('#n-done').textContent = job.counts.done;
+  $('#n-skipped').textContent = job.counts.skipped;
+  $('#n-failed').textContent = job.counts.failed;
+  $('#job-count').textContent = `${job.finished} of ${job.total}`;
+  const running = job.status === 'running';
+  $('#job-title').textContent = running ? `Creating products… ${job.counts.running} in progress` : 'Batch finished';
+  // rough time left, from the average so far
+  if (running && job.finished > 0) {
+    const perItem = (Date.now() - jobStart) / job.finished;
+    const left = Math.max(0, Math.round(perItem * (job.total - job.finished) / 1000));
+    $('#job-eta').textContent = left ? `about ${left >= 90 ? Math.round(left / 60) + ' min' : left + ' s'} left` : '';
+  } else $('#job-eta').textContent = running ? '' : `took ${Math.round(((job.finishedAt || Date.now()) - job.createdAt) / 1000)} s`;
+
+  const orphans = [];
+  for (const it of job.items) {
+    if (!showRowState(it.sku, it.state, it.result, it.attempt) && it.result) orphans.push(it);
+  }
+  // Results for rows not on screen (e.g. after reloading the page)
+  if (orphans.length) {
+    const box = $('#job-orphans');
+    box.innerHTML += orphans.map(it => it.state === 'done' && it.result?.ok
+      ? `<div class="ok">${esc(it.sku)}: created. <a href="${esc(it.result.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a></div>`
+      : `<div class="${it.state === 'skipped' ? 'warn' : 'err'}">${esc(it.sku)}: ${esc(it.result?.error || it.state)}</div>`).join('');
+  }
+}
+
+async function pollJob() {
+  if (!jobId) return;
+  try {
+    const job = await api(`jobs/${jobId}?since=${jobSince}`);
+    pollErrors = 0;
+    jobSince = job.serverTime;
+    renderJob(job);
+    if (job.status === 'running') { pollTimer = setTimeout(pollJob, 1500); return; }
+    finishJob(job);
+  } catch (e) {
+    if (/not found|wrong password/i.test(e.message)) { jobDone(e.message, true); return; }
+    // brief network hiccup: keep trying, the job carries on on the server
+    if (++pollErrors <= 20) { pollTimer = setTimeout(pollJob, 3000); setStatus('#add-status', 'Connection lost, retrying… (the batch keeps running on the server)', true); return; }
+    jobDone('Lost contact with the server. Reload the page to see the batch progress.', true);
+  }
+}
+
+function finishJob(job) {
+  const c = job.counts;
+  const parts = [`Created ${c.done} of ${job.total}`];
+  if (c.skipped) parts.push(`${c.skipped} skipped`);
+  if (c.failed) parts.push(`${c.failed} failed (select them and press Create again)`);
+  jobDone(parts.join(', ') + '.', c.failed > 0);
+  // re-tick failed rows so a retry is one click
+  for (const tr of document.querySelectorAll('#preview-body tr[data-i]')) {
+    if (tr.querySelector('.result.err')) tr.querySelector('.pick').checked = true;
+  }
+  updateCount();
+}
+
+function jobDone(msg, isErr) {
+  clearTimeout(pollTimer);
+  jobId = null;
+  try { sessionStorage.removeItem('kx-job'); } catch (e) {}
+  setStatus('#add-status', msg, isErr);
+  $('#create-btn').disabled = false;
+  updateCount();
+}
+
+function followJob(job) {
+  jobId = job.id; jobSince = job.serverTime || 0; pollErrors = 0;
+  jobStart = job.createdAt || Date.now();
+  $('#job-orphans').innerHTML = '';
+  try { sessionStorage.setItem('kx-job', job.id); } catch (e) {}
+  $('#create-btn').disabled = true;
+  renderJob(job);
+  setStatus('#add-status', `Creating ${job.total} product${job.total > 1 ? 's' : ''} in Shopify…`);
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(pollJob, 1000);
+}
+
 $('#create-btn').addEventListener('click', async () => {
+  if (jobId) return;
   const rows = [...document.querySelectorAll('#preview-body tr[data-i]')].filter(tr => tr.querySelector('.pick').checked);
   const items = rows.map(tr => ({
     sku: previewData[tr.dataset.i].sku,
@@ -435,33 +607,30 @@ $('#create-btn').addEventListener('click', async () => {
   }));
   if (!items.length) return;
   const btn = $('#create-btn'); btn.disabled = true;
-  setStatus('#add-status', `Creating ${items.length} product${items.length > 1 ? 's' : ''} in Shopify…`);
+  setStatus('#add-status', 'Starting…');
   try {
-    const { results } = await api('create', { method: 'POST', body: JSON.stringify({ items }) });
-    let ok = 0;
-    results.forEach(r => {
-      const tr = rows.find(row => previewData[row.dataset.i].sku === r.sku);
-      if (!tr) return;
-      const out = tr.querySelector('.result');
-      if (r.ok) {
-        ok++;
-        tr.querySelector('.pick').checked = false;
-        out.className = 'note result ok';
-        const imgs = (r.images || []).filter(x => !x.error);
-        const imgNote = imgs.length ? `<div class="note">${imgs.length} image${imgs.length > 1 ? 's' : ''} as 1000×1000 WebP: ${imgs.map(x => `${x.kb} KB`).join(', ')}</div>` : '';
-        out.innerHTML = `Created at /products/${esc(r.handle)}. <a href="${esc(r.adminUrl)}" target="_blank" rel="noopener">Open in Shopify</a>` +
-          imgNote + (r.warnings?.length ? `<div class="note warn">${esc(r.warnings.join(' | '))}</div>` : '');
-      } else {
-        out.className = 'note result err';
-        out.textContent = r.error;
-      }
-    });
-    setStatus('#add-status', `Created ${ok} of ${results.length}.`, ok < results.length);
-    updateCount();
+    const job = await api('create', { method: 'POST', body: JSON.stringify({ items }) });
+    followJob(job);
   } catch (e) {
     setStatus('#add-status', e.message, true);
-  } finally { btn.disabled = false; }
+    btn.disabled = false;
+  }
 });
+
+// After a page reload, pick up a batch that is still running
+async function resumeJob() {
+  try {
+    const { job } = await api('jobs');
+    if (!job) return;
+    let saved = null;
+    try { saved = sessionStorage.getItem('kx-job'); } catch (e) {}
+    if (job.status === 'running' || job.id === saved) {
+      selectTab('add');
+      if (job.status === 'running') followJob(job);
+      else { renderJob(job); try { sessionStorage.removeItem('kx-job'); } catch (e) {} }
+    }
+  } catch (e) { /* not logged in yet */ }
+}
 
 // ---------- Live stock ----------
 $('#load-stock').addEventListener('click', loadStock);

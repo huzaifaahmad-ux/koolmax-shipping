@@ -18,7 +18,11 @@ let sharpLib = null;
 let sharpError = null;
 function getSharp() {
   if (sharpLib || sharpError) return sharpLib;
-  try { sharpLib = require('sharp'); }
+  try {
+    sharpLib = require('sharp');
+    sharpLib.cache(false);        // don't keep decoded images in memory between jobs
+    sharpLib.concurrency(1);      // one CPU thread per conversion, keeps memory flat
+  }
   catch (e) {
     sharpError = e;
     console.log('[images] sharp not available, images will not be converted:', e.message.split('\n')[0]);
@@ -31,6 +35,23 @@ const core = require('./specs-sync');
 const MIN_BYTES = (parseInt(process.env.IMAGE_MIN_KB, 10) || 80) * 1024;
 const MAX_BYTES = (parseInt(process.env.IMAGE_MAX_KB, 10) || 100) * 1024;
 const SIZE = parseInt(process.env.IMAGE_SIZE, 10) || 1000;
+// How many images may be converted at the same time across ALL products being created.
+// This is what keeps memory low when 25+ products are created in one go.
+const IMAGE_CONCURRENCY = parseInt(process.env.IMAGE_CONCURRENCY, 10) || 2;
+
+// Tiny semaphore: limit(fn) waits for a free slot, then runs fn.
+function createLimiter(max) {
+  let active = 0;
+  const queue = [];
+  const next = () => {
+    if (active >= max || !queue.length) return;
+    active++;
+    const { fn, resolve, reject } = queue.shift();
+    Promise.resolve().then(fn).then(resolve, reject).finally(() => { active--; next(); });
+  };
+  return fn => new Promise((resolve, reject) => { queue.push({ fn, resolve, reject }); next(); });
+}
+const imageSlot = createLimiter(IMAGE_CONCURRENCY);
 
 // 1. Square canvas: the whole product fitted inside 1000 x 1000, padded with white.
 // 2. Highest WebP quality that stays under the maximum (binary search), so the file
@@ -105,10 +126,12 @@ async function prepareMedia(urls, { alt, baseName }) {
   for (let i = 0; i < urls.length; i++) {
     const url = urls[i];
     try {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`Download failed (${res.status})`);
-      const original = Buffer.from(await res.arrayBuffer());
-      const webp = await toWebpUnderLimit(original);
+      const { original, webp } = await imageSlot(async () => {
+        const res = await fetch(url, { signal: AbortSignal.timeout(60000) });
+        if (!res.ok) throw new Error(`Download failed (${res.status})`);
+        const original = Buffer.from(await res.arrayBuffer());
+        return { original, webp: await toWebpUnderLimit(original) };
+      });
       const filename = `${baseName}${urls.length > 1 ? '-' + (i + 1) : ''}.webp`;
       const resourceUrl = await stagedUpload(webp.buffer, filename);
       media.push({ originalSource: resourceUrl, mediaContentType: 'IMAGE', alt });
@@ -126,4 +149,4 @@ async function prepareMedia(urls, { alt, baseName }) {
   return { media, report };
 }
 
-module.exports = { prepareMedia, toWebpUnderLimit, MIN_BYTES, MAX_BYTES, SIZE };
+module.exports = { prepareMedia, createLimiter, toWebpUnderLimit, MIN_BYTES, MAX_BYTES, SIZE };

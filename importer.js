@@ -24,7 +24,10 @@ const images = optionalRequire('./image-optimizer', {
 const PRICE_DISCOUNT = 0.47;    // -47%
 const PRICE_MARKUP = 0.30;      // then +30%
 const CATEGORY_NAME_FIELD = 'name';   // field name on Combisteel object_Category (check in Postman)
-const MAX_SKUS_PER_REQUEST = 50;
+const MAX_SKUS_PER_REQUEST = 50;          // per preview request (the dashboard sends small chunks)
+const MAX_ITEMS_PER_JOB = 200;            // products in one "Create" batch
+const CREATE_CONCURRENCY = parseInt(process.env.CREATE_CONCURRENCY, 10) || 3;   // products created at the same time
+const JOB_KEEP_MS = 6 * 60 * 60 * 1000;   // finished jobs are kept 6 hours for the dashboard
 
 const round2 = n => Math.round(n * 100) / 100;
 
@@ -284,7 +287,10 @@ async function previewSku(sku, attrMap, skuGroup, fx) {
 }
 
 // ---------- Create one product ----------
-async function createProduct(item, attrMap) {
+// ctx.stage tells the job runner how far we got, so a failed product is only retried
+// when it's certain nothing was created in Shopify yet.
+async function createProduct(item, attrMap, ctx = {}) {
+  ctx.stage = 'checking';
   const sku = String(item.sku).trim();
   if (await findShopifySku(sku)) return { sku, error: 'Already exists in Shopify, skipped' };
 
@@ -326,6 +332,7 @@ async function createProduct(item, attrMap) {
         userErrors { field message }
       }
     }`;
+  ctx.stage = 'creating';
   let created = await core.shopifyQuery(createQuery, { product, media });
   // If the URL is already used by another product, let Shopify pick a free one (adds -1, -2 ...)
   const warnings = [];
@@ -382,6 +389,94 @@ async function createProduct(item, attrMap) {
   };
 }
 
+// ---------- Background create jobs ----------
+const jobs = new Map();
+const activeSkus = new Set();   // SKUs being created right now, in any job (stops double creation)
+
+function jobView(job, since = 0) {
+  const counts = { queued: 0, running: 0, done: 0, failed: 0, skipped: 0 };
+  for (const it of job.items) counts[it.state]++;
+  const finished = counts.done + counts.failed + counts.skipped;
+  return {
+    id: job.id, status: job.status, total: job.items.length, finished, counts,
+    createdAt: job.createdAt, finishedAt: job.finishedAt || null,
+    // only items that changed since the dashboard last asked
+    items: job.items.filter(it => it.updatedAt > since).map(it => ({ sku: it.sku, state: it.state, attempt: it.attempt, result: it.result })),
+    serverTime: Date.now(),
+  };
+}
+
+function startJob(items) {
+  const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  const now = Date.now();
+  const job = {
+    id, status: 'running', createdAt: now,
+    items: items.map(input => ({ sku: input.sku, input, state: 'queued', attempt: 0, result: null, updatedAt: now })),
+  };
+  jobs.set(id, job);
+  runJob(job).catch(e => {
+    console.log('[importer] job crashed:', e.message);
+    for (const it of job.items) if (it.state === 'queued' || it.state === 'running') setItem(it, 'failed', { sku: it.sku, error: 'Stopped: ' + e.message });
+    job.status = 'finished'; job.finishedAt = Date.now();
+  });
+  return job;
+}
+
+function setItem(it, state, result) {
+  it.state = state;
+  if (result !== undefined) it.result = result;
+  it.updatedAt = Date.now();
+}
+
+async function runJob(job) {
+  const attrMap = await core.getAttributeMap();
+  let next = 0;
+  const worker = async () => {
+    while (next < job.items.length) {
+      const it = job.items[next++];
+      await processItem(it, attrMap);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CREATE_CONCURRENCY, job.items.length) }, worker));
+  job.status = 'finished';
+  job.finishedAt = Date.now();
+  const ok = job.items.filter(i => i.state === 'done').map(i => i.sku);
+  console.log(`[importer] Job ${job.id}: created ${ok.length} of ${job.items.length}`, ok);
+}
+
+async function processItem(it, attrMap) {
+  if (activeSkus.has(it.sku)) return setItem(it, 'skipped', { sku: it.sku, error: 'Already being created in another batch, skipped' });
+  activeSkus.add(it.sku);
+  try {
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      it.attempt = attempt;
+      setItem(it, 'running');
+      const ctx = {};
+      try {
+        const r = await createProduct(it.input, attrMap, ctx);
+        const state = r.ok ? 'done' : /already exists/i.test(r.error || '') ? 'skipped' : 'failed';
+        return setItem(it, state, r);
+      } catch (e) {
+        // Retry only if Shopify never received the create, otherwise we could make a duplicate
+        const safe = ctx.stage !== 'creating';
+        if (!safe || attempt === 3) {
+          return setItem(it, 'failed', { sku: it.sku, error: safe ? e.message
+            : e.message + ' (check Shopify before retrying: the product may have been created)' });
+        }
+        await core.sleep(2000 * attempt);
+      }
+    }
+  } finally {
+    activeSkus.delete(it.sku);
+  }
+}
+
+// Forget old finished jobs
+setInterval(() => {
+  const cutoff = Date.now() - JOB_KEEP_MS;
+  for (const [id, job] of jobs) if (job.status === 'finished' && job.finishedAt < cutoff) jobs.delete(id);
+}, 30 * 60 * 1000).unref();
+
 // ---------- Router ----------
 function createImporter({ skuGroup = {} } = {}) {
   const router = express.Router();
@@ -404,34 +499,48 @@ function createImporter({ skuGroup = {} } = {}) {
     try {
       const attrMap = await core.getAttributeMap();
       const fx = await getEurToGbp();
-      const results = [];
-      for (const sku of skus) {
-        try { results.push(await previewSku(sku, attrMap, skuGroup, fx)); }
-        catch (e) { results.push({ sku, error: e.message }); }
-        await core.sleep(150);
-      }
+      // 3 at a time, results kept in the order the SKUs were entered
+      const results = new Array(skus.length);
+      let next = 0;
+      const worker = async () => {
+        while (next < skus.length) {
+          const i = next++;
+          try { results[i] = await previewSku(skus[i], attrMap, skuGroup, fx); }
+          catch (e) { results[i] = { sku: skus[i], error: e.message }; }
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(3, skus.length) }, worker));
       res.json({ results, formula: { rate: fx.rate, source: fx.source, discount: PRICE_DISCOUNT, markup: PRICE_MARKUP } });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
   });
 
-  router.post('/api/create', async (req, res) => {
-    const items = (req.body.items || []).filter(i => i && i.sku);
+  // Create runs as a background job: the request returns straight away with a job id,
+  // the server works through the products (a few at a time) and the dashboard polls
+  // GET /api/jobs/:id for progress. No long request, so no 502/timeout, whatever the batch size.
+  router.post('/api/create', (req, res) => {
+    const seen = new Set();
+    const items = (req.body.items || [])
+      .filter(i => i && i.sku)
+      .map(i => ({ ...i, sku: String(i.sku).trim() }))
+      .filter(i => !seen.has(i.sku) && seen.add(i.sku));
     if (!items.length) return res.status(400).json({ error: 'Select at least one product' });
-    try {
-      const attrMap = await core.getAttributeMap();
-      const results = [];
-      for (const item of items) {
-        try { results.push(await createProduct(item, attrMap)); }
-        catch (e) { results.push({ sku: item.sku, error: e.message }); }
-        await core.sleep(300);
-      }
-      console.log('[importer] Created:', results.filter(r => r.ok).map(r => r.sku));
-      res.json({ results });
-    } catch (e) {
-      res.status(500).json({ error: e.message });
-    }
+    if (items.length > MAX_ITEMS_PER_JOB) return res.status(400).json({ error: `Max ${MAX_ITEMS_PER_JOB} products per batch` });
+    const job = startJob(items);
+    res.status(202).json(jobView(job));
+  });
+
+  router.get('/api/jobs/:id', (req, res) => {
+    const job = jobs.get(req.params.id);
+    if (!job) return res.status(404).json({ error: 'Job not found. The server may have restarted; press Create again, products already made are skipped.' });
+    res.json(jobView(job, Number(req.query.since) || 0));
+  });
+
+  // Latest job, so a reloaded dashboard can pick up a batch that is still running
+  router.get('/api/jobs', (req, res) => {
+    const latest = [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt)[0];
+    res.json({ job: latest ? jobView(latest) : null });
   });
 
   // Optional: rewrite one meta description with the Claude API, in the copywriter's style

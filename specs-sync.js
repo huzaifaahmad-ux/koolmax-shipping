@@ -125,30 +125,67 @@ function translateValue(v) {
 }
 
 // ---------- API helpers ----------
-async function combisteelQuery(query, variables = {}) {
-  const res = await fetch(`${COMBISTEEL_URL}?apikey=${process.env.COMBISTEEL_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': process.env.COMBISTEEL_API_KEY },
-    body: JSON.stringify({ query, variables }),
-  });
-  const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors).slice(0, 500));
+// ---------- Requests with automatic retry ----------
+// Retries when the other side asks us to slow down (Shopify THROTTLED / HTTP 429) or is
+// briefly unavailable. A mutation (create/update) is only retried when we know it did NOT
+// run (throttled or 429), so a product can never be created twice by a retry.
+const RETRY_DELAYS = [1000, 2000, 4000, 8000, 15000];
+
+class RequestError extends Error {
+  constructor(message, { retryable = false, safeForMutation = false } = {}) {
+    super(message);
+    this.retryable = retryable;
+    this.safeForMutation = safeForMutation;
+  }
+}
+
+async function postGraphql(url, headers, query, variables) {
+  let res;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(60000),
+    });
+  } catch (e) {
+    throw new RequestError(`Network error: ${e.message}`, { retryable: true });
+  }
+  if (res.status === 429) throw new RequestError('Rate limited (429)', { retryable: true, safeForMutation: true });
+  if (res.status >= 500) throw new RequestError(`Server error (${res.status})`, { retryable: true });
+  let json;
+  try { json = await res.json(); }
+  catch (e) { throw new RequestError(`Bad response (${res.status})`, { retryable: res.status >= 500 }); }
+  if (json.errors) {
+    const text = JSON.stringify(json.errors);
+    const throttled = /THROTTLED/i.test(text);
+    throw new RequestError(text.slice(0, 500), { retryable: throttled, safeForMutation: throttled });
+  }
   return json.data;
+}
+
+async function withRetry(query, fn) {
+  const isMutation = /^\s*mutation\b/.test(query);
+  for (let attempt = 0; ; attempt++) {
+    try { return await fn(); }
+    catch (e) {
+      const canRetry = e.retryable && (!isMutation || e.safeForMutation) && attempt < RETRY_DELAYS.length;
+      if (!canRetry) throw e;
+      await sleep(RETRY_DELAYS[attempt] + Math.floor(Math.random() * 500));
+    }
+  }
+}
+
+async function combisteelQuery(query, variables = {}) {
+  return withRetry(query, () => postGraphql(
+    `${COMBISTEEL_URL}?apikey=${process.env.COMBISTEEL_API_KEY}`,
+    { 'X-API-Key': process.env.COMBISTEEL_API_KEY },
+    query, variables));
 }
 
 async function shopifyQuery(query, variables = {}) {
   const url = `https://${process.env.SHOPIFY_STORE_URL}/admin/api/${process.env.SHOPIFY_API_VERSION}/graphql.json`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN,
-    },
-    body: JSON.stringify({ query, variables }),
-  });
-  const json = await res.json();
-  if (json.errors) throw new Error(JSON.stringify(json.errors).slice(0, 500));
-  return json.data;
+  return withRetry(query, () => postGraphql(url, { 'X-Shopify-Access-Token': process.env.SHOPIFY_ACCESS_TOKEN }, query, variables));
 }
 
 // ---------- Combisteel attribute lookup (cached 6 hours) ----------
