@@ -204,6 +204,7 @@
       </div>
       <div class="row" style="align-items:center">
         <button class="btn go" id="create-btn">Create selected products</button>
+        <button class="btn secondary" id="ai-all" type="button">Write all descriptions with AI</button>
         <span class="hint" id="create-count"></span>
       </div>
       <div class="panel progress" id="job-panel" hidden aria-live="polite">
@@ -395,9 +396,15 @@ function renderPreview() {
               <button type="button" class="btn secondary ai-meta" style="padding:6px 12px">Rewrite with AI</button>
             </div>
             <label class="field">Description (HTML)
-              <textarea class="desc" style="min-height:140px;width:100%">${esc(r.descriptionHtml)}</textarea>
-              <span class="hint">${r.descriptionSource === 'combisteel' ? 'Long description from Combisteel (English)' : 'No long description in Combisteel, short description generated from specs'}</span>
+              <textarea class="desc" style="min-height:160px;width:100%">${esc(r.descriptionHtml)}</textarea>
             </label>
+            <span class="hint desc-source">${descSourceText(r.descriptionSource)}</span>
+            <div class="row" style="gap:6px;align-items:center">
+              <button type="button" class="btn secondary ai-desc" style="padding:6px 12px">Rewrite with AI</button>
+              ${r.templateHtml ? '<button type="button" class="btn secondary use-template" style="padding:6px 12px">Copywriter template</button>' : ''}
+              ${r.combisteelHtml ? '<button type="button" class="btn secondary use-combisteel" style="padding:6px 12px">Combisteel original</button>' : ''}
+            </div>
+            <div class="note warn desc-warn"></div>
           </div>
           <ul>${r.features.map(([l, v]) => `<li>${esc(v === 'Yes' ? l : l + ': ' + v)}</li>`).join('')}</ul>
           <ul>${r.specification.map(([l, v]) => `<li>${esc(l)}: ${esc(v)}</li>`).join('')}</ul>
@@ -427,6 +434,65 @@ $('#preview-body').addEventListener('input', e => {
   }
 });
 $('#preview-body').addEventListener('change', e => { if (e.target.classList.contains('pick')) updateCount(); });
+
+// ---------- Product description: source buttons + AI rewrite ----------
+function descSourceText(src, extra) {
+  const t = {
+    saved: 'Your copywriter’s description for this SKU',
+    template: 'Copywriter-style description built from the Combisteel specs',
+    ai: 'Written by AI in your copywriter’s style',
+    combisteel: 'Combisteel’s original description',
+    generated: 'Short description generated from specs',
+  }[src] || '';
+  return t + (extra ? ' · ' + extra : '');
+}
+const wordCount = html => String(html).replace(/<[^>]+>/g, ' ').trim().split(/\s+/).filter(Boolean).length;
+function setDesc(tr, html, src, extra) {
+  tr.querySelector('.desc').value = html;
+  tr.querySelector('.desc-source').textContent = descSourceText(src, extra || `${wordCount(html)} words`);
+}
+async function aiDescribeRow(tr) {
+  const r = previewData[tr.dataset.i];
+  const btn = tr.querySelector('.ai-desc');
+  const warn = tr.querySelector('.desc-warn');
+  btn.disabled = true; btn.textContent = 'Writing…'; warn.textContent = '';
+  try {
+    const data = await api('description-ai', { method: 'POST', body: JSON.stringify({ sku: r.sku, title: tr.querySelector('.title').value }) });
+    setDesc(tr, data.descriptionHtml, 'ai', `${data.words} words`);
+    warn.textContent = (data.warnings || []).join(' ');
+    return true;
+  } catch (err) {
+    warn.textContent = 'AI rewrite failed: ' + err.message;
+    return false;
+  } finally { btn.disabled = false; btn.textContent = 'Rewrite with AI'; }
+}
+$('#preview-body').addEventListener('click', e => {
+  const tr = e.target.closest('tr');
+  if (!tr || tr.dataset.i == null) return;
+  const r = previewData[tr.dataset.i];
+  if (e.target.closest('.ai-desc')) aiDescribeRow(tr);
+  if (e.target.closest('.use-template')) { setDesc(tr, r.templateHtml, 'template'); tr.querySelector('.desc-warn').textContent = ''; }
+  if (e.target.closest('.use-combisteel')) { setDesc(tr, r.combisteelHtml, 'combisteel'); tr.querySelector('.desc-warn').textContent = ''; }
+});
+// All selected rows, 3 at a time
+$('#ai-all').addEventListener('click', async () => {
+  const rows = [...document.querySelectorAll('#preview-body tr[data-i]')].filter(tr => tr.querySelector('.pick').checked);
+  if (!rows.length) return;
+  const btn = $('#ai-all'); btn.disabled = true;
+  let done = 0, failed = 0, next = 0;
+  const show = () => setStatus('#add-status', `Writing descriptions with AI… ${done} of ${rows.length}${failed ? `, ${failed} failed` : ''}`, failed > 0);
+  show();
+  const worker = async () => {
+    while (next < rows.length) {
+      const tr = rows[next++];
+      if (!(await aiDescribeRow(tr))) failed++;
+      done++; show();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, rows.length) }, worker));
+  setStatus('#add-status', `AI descriptions written for ${done - failed} of ${rows.length}. Check the figures flagged in orange before creating.`, failed > 0);
+  btn.disabled = false;
+});
 
 // Meta description: live character count + optional AI rewrite
 function updateSeoCount(tr) {

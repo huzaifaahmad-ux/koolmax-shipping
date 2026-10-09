@@ -168,19 +168,19 @@ const CATEGORIES = [
     ],
   },
   {
-    id: 'warewash', match: /dish.?wash|glass.?wash|pass.?through|hood/,
-    facts: f => [f.basketsPerHour ? `up to ${f.basketsPerHour} baskets an hour` : null],
-    benefits: () => [
-      'keeping clean crockery and glassware moving through a busy service',
-      'so hygienic, spotless results never hold up the pass',
-    ],
-  },
-  {
     id: 'hotcupboard', match: /heated|warming|hot cupboard|plate warmer/,
     facts: f => [f.doors ? plural(f.doors, 'door') : null, f.temp ? `${f.temp}°C range` : null],
     benefits: () => [
       'keeping plates and dishes warm and ready for service',
       'so food and crockery stay at temperature right up to the pass',
+    ],
+  },
+  {
+    id: 'warewash', match: /dish.?wash|glass.?wash|pass.?through|hood/,
+    facts: f => [f.basketsPerHour ? `up to ${f.basketsPerHour} baskets an hour` : null],
+    benefits: () => [
+      'keeping clean crockery and glassware moving through a busy service',
+      'so hygienic, spotless results never hold up the pass',
     ],
   },
   {
@@ -207,7 +207,7 @@ const CATEGORIES = [
 
 function categoryFor(title) {
   const t = title.toLowerCase();
-  return CATEGORIES.find(c => c.match.test(t));
+  return CATEGORIES.find(c => c.match.test(t)) || CATEGORIES[CATEGORIES.length - 1];
 }
 
 // Fuel / model word, only when the title doesn't already say it

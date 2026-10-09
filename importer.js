@@ -15,6 +15,11 @@ const metaCopy = optionalRequire('./meta-copy', {
   templateMetaDescription: title => (/^combisteel\b/i.test(title) ? title : `Combisteel ${title}`) + ' for professional commercial kitchens.',
   aiMetaDescription: async () => { throw new Error('meta-copy.js is not uploaded'); },
 });
+const descCopy = optionalRequire('./description-copy', {
+  savedDescription: () => null,
+  templateDescription: null,
+  aiDescription: async () => { throw new Error('description-copy.js is not uploaded'); },
+});
 const images = optionalRequire('./image-optimizer', {
   prepareMedia: async (urls, { alt }) => ({ media: urls.map(u => ({ originalSource: u, mediaContentType: 'IMAGE', alt })), report: [] }),
 });
@@ -147,9 +152,17 @@ function formatLongDescription(text) {
     .join('');
 }
 
-function productDescription(node, title, raw) {
-  const long = formatLongDescription(node.longDescriptionEn);
-  return { html: long || buildDescriptionHtml(title, raw), source: long ? 'combisteel' : 'generated' };
+// Description shown in the dashboard (and used if the box is left empty):
+//   1. the copywriter's saved description for this SKU (description-examples.json)
+//   2. otherwise the copywriter-style template built from the specs
+//   3. otherwise Combisteel's own long description / a short generated line
+function productDescription(node, title, raw, sku) {
+  const combisteel = formatLongDescription(node.longDescriptionEn);
+  const saved = descCopy.savedDescription(sku);
+  const template = descCopy.templateDescription ? descCopy.templateDescription({ sku, title, raw }) : null;
+  const html = saved || template || combisteel || buildDescriptionHtml(title, raw);
+  const source = saved ? 'saved' : template ? 'template' : combisteel ? 'combisteel' : 'generated';
+  return { html, source, templateHtml: template, combisteelHtml: combisteel };
 }
 
 // ---------- Shopify helpers ----------
@@ -262,7 +275,7 @@ async function previewSku(sku, attrMap, skuGroup, fx) {
   const exists = await findShopifySku(sku);
   const suggested = suggestGroup({ weight, height, model: raw['6074'] });
 
-  const desc = productDescription(node, title, raw);
+  const desc = productDescription(node, title, raw, sku);
 
   return {
     ...out,
@@ -270,6 +283,8 @@ async function previewSku(sku, attrMap, skuGroup, fx) {
     title,
     descriptionHtml: desc.html,
     descriptionSource: desc.source,
+    templateHtml: desc.templateHtml,
+    combisteelHtml: desc.combisteelHtml,
     apiPrice: node.price,
     price: node.price != null ? finalPrice(node.price, fx.rate) : null,
     stock: node.stock ?? 0,
@@ -309,7 +324,7 @@ async function createProduct(item, attrMap, ctx = {}) {
 
   const product = {
     title,
-    descriptionHtml: (item.descriptionHtml && item.descriptionHtml.trim()) || productDescription(node, title, raw).html,
+    descriptionHtml: (item.descriptionHtml && item.descriptionHtml.trim()) || productDescription(node, title, raw, sku).html,
     vendor: 'Combisteel',
     status: item.status === 'ACTIVE' ? 'ACTIVE' : 'DRAFT',
     handle: slugify(item.handle || item.seoTitle || buildSeo(title, raw, sku).seoTitle),
@@ -554,6 +569,23 @@ function createImporter({ skuGroup = {} } = {}) {
       if (!node) return res.status(404).json({ error: 'SKU not found in Combisteel PIM' });
       const { specification } = core.decodeSpecs(node, attrMap);
       res.json({ seoDescription: await metaCopy.aiMetaDescription(title, {}, specification) });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
+
+  // Rewrite one product description with the Claude API, in the copywriter's style
+  router.post('/api/description-ai', async (req, res) => {
+    const sku = String(req.body.sku || '').trim();
+    const title = String(req.body.title || '').trim();
+    if (!sku || !title) return res.status(400).json({ error: 'SKU and title are required' });
+    try {
+      const attrMap = await core.getAttributeMap();
+      const node = await core.getPimProduct(sku);
+      if (!node) return res.status(404).json({ error: 'SKU not found in Combisteel PIM' });
+      const { features, specification } = core.decodeSpecs(node, attrMap);
+      const out = await descCopy.aiDescription({ sku, title, specification, features, longDescription: node.longDescriptionEn });
+      res.json({ descriptionHtml: out.html, words: out.words, model: out.model, warnings: out.warnings });
     } catch (e) {
       res.status(500).json({ error: e.message });
     }
