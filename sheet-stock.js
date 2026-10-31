@@ -231,7 +231,7 @@ async function searchVariants(q) {
 }
 const squash = s => String(s || '').toUpperCase().replace(/\s+/g, ' ').trim();
 
-async function resolveSku(sku, combisteelSkus) {
+async function resolveSku(sku) {
   const out = { found: false, problems: [], warnings: [] };
   const nodes = await searchVariants(`sku:"${sku.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`);
   const exact = nodes.filter(v => v.sku === sku);
@@ -261,7 +261,9 @@ async function resolveSku(sku, combisteelSkus) {
     location: l.location.name || l.location.id.split('/').pop(),
     ...Object.fromEntries(l.quantities.map(q => [q.name, q.quantity])),
   }));
-  if (/^combisteel$/i.test(out.vendor || '') || combisteelSkus.has(sku)) out.problems.push('Belongs to the Combisteel stock sync; this sync will never touch it.');
+  // The Combisteel stock sync only touches vendor "Combisteel" products (Combisteel SKUs look like 7178.0100).
+  // SKU_GROUP is the shipping-group list for ALL products, so it is NOT used here.
+  if (/^combisteel$/i.test(out.vendor || '') || /^\d+\.\d+$/.test(sku)) out.problems.push('Belongs to the Combisteel stock sync; this sync will never touch it.');
   if (!out.tracked) out.problems.push('Inventory tracking is off for this variant.');
   if (!out.levels.length) out.problems.push('Not stocked at any location.');
   return out;
@@ -286,17 +288,18 @@ async function runLimited(items, limit, fn) {
   return out;
 }
 
-async function validate({ combisteelSkus = new Set() } = {}) {
+async function validate() {
   const startedAt = new Date();
   const sheet = await readMainSheet();
   const locs = await listLocations();
-  const targetId = process.env.SHEET_STOCK_LOCATION_ID || null;
+  const rawLoc = (process.env.SHEET_STOCK_LOCATION_ID || '').trim();
+  const targetId = rawLoc ? (/^\d+$/.test(rawLoc) ? `gid://shopify/Location/${rawLoc}` : rawLoc) : null;
   const target = targetId ? (locs.locations.find(l => l.id === targetId) || { id: targetId, name: null }) : null;
 
   const items = await runLimited(CONFIG.mappings, 4, async m => {
     const s = checkSheet(sheet.rows, m);
     let sh;
-    try { sh = await resolveSku(m.sku, combisteelSkus); }
+    try { sh = await resolveSku(m.sku); }
     catch (e) { sh = { found: false, problems: [`Shopify lookup failed: ${e.message.slice(0, 160)}`], warnings: [] }; }
 
     const problems = [...s.problems, ...sh.problems];
@@ -346,7 +349,7 @@ async function validate({ combisteelSkus = new Set() } = {}) {
 }
 
 // ---------- routes (mounted inside the password-protected /admin/api) ----------
-function createRouter({ skuGroup = {} } = {}) {
+function createRouter() {
   const router = express.Router();
   let running = null;
   let last = null;
@@ -355,7 +358,7 @@ function createRouter({ skuGroup = {} } = {}) {
 
   router.post('/api/sheet-stock/validate', async (req, res) => {
     if (running) return res.status(409).json({ error: 'A validation is already running, try again in a moment' });
-    running = validate({ combisteelSkus: new Set(Object.keys(skuGroup)) });
+    running = validate();
     try { last = await running; res.json(last); }
     catch (e) { res.status(500).json({ error: e.message }); }
     finally { running = null; }
