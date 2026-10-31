@@ -1,11 +1,13 @@
 // sheet-stock.js
 // Google Sheet ("Main Sheet") -> Shopify stock for Koolmax's own products.
 //
-// PHASE 0 + 1: READ-ONLY. This file never writes to Shopify.
+// Live updates ONLY when the dashboard mode is "Live" (and SHEET_SYNC_DISABLED is not true).
 //  - Validate: reads the live Main Sheet, checks every approved mapping (label, size header, value),
 //    resolves each exact Shopify SKU to its variant, inventory item and locations.
-//  - Dry run: plans exactly what a live sync would write (on_hand), keeps state and history,
-//    and can run on a schedule. Writing comes in Phase 2, only after approval.
+//  - Dry run: plans exactly what a live sync would write (on_hand), nothing written.
+//  - Live: writes on_hand for the 80 approved SKUs at SHEET_STOCK_LOCATION_ID, one SKU per call,
+//    each guarded by changeFromQuantity. Unusual runs are held for approval.
+//  This sync only touches non-Combisteel products, so it never overlaps the Combisteel stock sync.
 //
 // Railway variables:
 //   GOOGLE_SERVICE_ACCOUNT_JSON  service account key (the whole JSON, or base64 of it)
@@ -353,9 +355,7 @@ async function validate() {
 }
 
 // =====================================================================
-// PHASE 1: DRY RUN. Plans exactly what a live sync would write, keeps state
-// and history, can run on a schedule. Still NO Shopify writes: the sender is
-// not part of this phase.
+// SYNC: dry run or live, state, schedule
 // =====================================================================
 
 // ---------- persistent state (Railway Volume) ----------
@@ -381,13 +381,16 @@ function writeJson(file, data) {
   fs.renameSync(tmp, file);           // atomic: never leaves a half-written file
 }
 const state = Object.assign(
-  { settings: { enabled: false, intervalHours: 2, mode: 'dry' }, dry: { lastSeen: {} }, live: { lastApplied: {} }, lastRunAt: null, lastSuccessAt: null },
+  { settings: { enabled: false, intervalHours: 1, mode: 'dry' }, dry: { lastSeen: {} }, live: { lastApplied: {} }, lastRunAt: null, lastSuccessAt: null },
   readJson(STATE_FILE, {}),
 );
-state.settings.mode = 'dry';           // Phase 1: dry only, whatever the file says
+state.dry = state.dry || { lastSeen: {} };
+state.live = state.live || { lastApplied: {} };
+if (!['dry', 'live'].includes(state.settings.mode)) state.settings.mode = 'dry';
 let runs = readJson(RUNS_FILE, []);
 const saveState = () => writeJson(STATE_FILE, state);
 const saveRuns = () => writeJson(RUNS_FILE, runs.slice(0, KEEP_RUNS));
+const liveBlocked = () => process.env.SHEET_SYNC_DISABLED === 'true';
 
 // ---------- plan ----------
 // on_hand rules (approved): sheet = physical warehouse stock.
@@ -412,32 +415,77 @@ function planItem(item, memory) {
   return { ...base, action, reason, baseline: !last, toZero: action === 'set' && item.proposedOnHand === 0 && (base.onHand ?? 0) > 0 };
 }
 
-// The exact Shopify call a live run would make (shown in the dry run, not sent)
+// ---------- the Shopify write ----------
+// API 2026-01+: changeFromQuantity + @idempotent key (required from 2026-04).
+// Older versions: compareQuantity (the same safety check, older name).
 const apiVersion = () => process.env.SHOPIFY_API_VERSION || '';
+const modernApi = () => apiVersion() >= '2026-01';
 const SET_MUTATION = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
   inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
-    inventoryAdjustmentGroup { reason referenceDocumentUri changes { name delta quantityAfterChange } }
+    inventoryAdjustmentGroup { reason referenceDocumentUri changes { name delta } }
     userErrors { code field message }
   }
 }`;
+const SET_MUTATION_LEGACY = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!) {
+  inventorySetQuantities(input: $input) {
+    inventoryAdjustmentGroup { reason referenceDocumentUri changes { name delta } }
+    userErrors { code field message }
+  }
+}`;
+function setInput(runId, p, locationId, from) {
+  const modern = modernApi();
+  return {
+    name: 'on_hand',
+    reason: 'correction',
+    referenceDocumentUri: `gid://koolmax-sheet-sync/SyncRun/${runId}`,
+    ...(modern ? {} : { ignoreCompareQuantity: false }),
+    quantities: [{
+      inventoryItemId: p.inventoryItemId, locationId, quantity: p.qty,
+      ...(modern ? { changeFromQuantity: from } : { compareQuantity: from }),   // write only if Shopify still has this value
+    }],
+  };
+}
+const idemKey = (runId, sku, attempt) => `sheet-${runId}-${crypto.createHash('sha1').update(sku).digest('hex').slice(0, 12)}-${attempt}`;
+
+// Preview of the calls (dry runs)
 function buildPayload(runId, plan, locationId) {
   const sets = plan.filter(p => p.action === 'set');
-  const batches = [];
-  for (let i = 0; i < sets.length; i += 50) {
-    batches.push({
-      idempotencyKey: `sheet-${runId}-${i / 50}`,
-      input: {
-        name: 'on_hand',
-        reason: 'correction',
-        referenceDocumentUri: `gid://koolmax-sheet-sync/SyncRun/${runId}`,
-        quantities: sets.slice(i, i + 50).map(p => ({
-          inventoryItemId: p.inventoryItemId, locationId, quantity: p.qty,
-          changeFromQuantity: p.onHand,      // fails safely if Shopify changed in the meantime
-        })),
-      },
-    });
+  return {
+    apiVersion: apiVersion(),
+    mutation: modernApi() ? SET_MUTATION : SET_MUTATION_LEGACY,
+    batches: sets.map(p => ({ sku: p.sku, ...(modernApi() ? { idempotencyKey: idemKey(runId, p.sku, 1) } : {}), input: setInput(runId, p, locationId, p.onHand) })),
+  };
+}
+
+async function readOnHand(inventoryItemId, locationId) {
+  const d = await core.shopifyQuery(`query($id: ID!, $loc: ID!) {
+    inventoryItem(id: $id) { inventoryLevel(locationId: $loc) { quantities(names: ["on_hand"]) { name quantity } } }
+  }`, { id: inventoryItemId, loc: locationId });
+  return d.inventoryItem?.inventoryLevel?.quantities?.find(q => q.name === 'on_hand')?.quantity ?? null;
+}
+
+// One SKU per call, so one problem never blocks the others.
+async function writeItem(runId, p, locationId) {
+  let from = p.onHand;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const vars = modernApi()
+      ? { input: setInput(runId, p, locationId, from), idempotencyKey: idemKey(runId, p.sku, attempt) }
+      : { input: setInput(runId, p, locationId, from) };
+    let d;
+    try { d = await core.shopifyQuery(modernApi() ? SET_MUTATION : SET_MUTATION_LEGACY, vars); }
+    catch (e) { return { ok: false, error: e.message.slice(0, 300) }; }
+    const r = d.inventorySetQuantities;
+    if (!r.userErrors.length) return { ok: true, before: from, after: p.qty };
+    const text = r.userErrors.map(e => `${e.code || ''} ${e.message}`).join(' ');
+    // Shopify's quantity moved between our read and our write (e.g. a sale): read it again and retry once.
+    if (attempt === 1 && /compare|change.?from|stale|mismatch/i.test(text)) {
+      try { from = await readOnHand(p.inventoryItemId, locationId); } catch (e) { return { ok: false, error: 'Re-read failed: ' + e.message }; }
+      if (from === p.qty) return { ok: true, before: from, after: from, note: 'Already matched after re-read' };
+      continue;
+    }
+    return { ok: false, error: r.userErrors.map(e => e.message).join('; ') };
   }
-  return { mutation: SET_MUTATION, apiVersion: apiVersion(), batches };
+  return { ok: false, error: 'Shopify quantity kept changing; will retry next run' };
 }
 
 // ---------- run ----------
@@ -448,45 +496,70 @@ async function exclusive(fn) {
   try { return await fn(); } finally { running = null; }
 }
 
-async function runSync({ trigger = 'manual' } = {}) {
-  const mode = 'dry';                                   // Phase 1
+async function runSync({ trigger = 'manual', mode = state.settings.mode, force = false } = {}) {
   const id = Date.now().toString(36);
   const started = new Date();
   const run = { id, mode, trigger, startedAt: started.toISOString(), finishedAt: null, result: 'running', message: '', summary: null, guard: null, items: [], payload: null };
   state.lastRunAt = started.toISOString();
   try {
+    if (mode === 'live' && liveBlocked()) throw new Error('Live updates are switched off (SHEET_SYNC_DISABLED=true). Nothing written.');
     const report = await validate();
     run.targetLocation = report.targetLocation;
     if (!report.targetLocation) throw new Error('SHEET_STOCK_LOCATION_ID is not set');
-    if (report.layoutAlarm) throw new Error(`Stopped: ${report.layoutAlarm}`);
+    if (report.layoutAlarm) throw new Error(`Stopped: ${report.layoutAlarm} Nothing written.`);
 
-    const memory = mode === 'dry' ? state.dry.lastSeen : state.live.lastApplied;
+    const memory = mode === 'live' ? state.live.lastApplied : state.dry.lastSeen;
     const plan = report.items.map(i => planItem(i, memory));
     const sets = plan.filter(p => p.action === 'set');
     const nonBaseline = sets.filter(p => !p.baseline);
     const toZero = nonBaseline.filter(p => p.toZero);
     if (nonBaseline.length > GUARD_MAX_CHANGES || toZero.length > GUARD_MAX_TO_ZERO) {
-      run.guard = `Unusual run: ${nonBaseline.length} SKUs changed${toZero.length ? `, ${toZero.length} would drop to 0` : ''} (limits ${GUARD_MAX_CHANGES} / ${GUARD_MAX_TO_ZERO}). A live run would hold these for your approval.`;
+      run.guard = `Unusual run: ${nonBaseline.length} SKUs changed in the sheet${toZero.length ? `, ${toZero.length} would drop to 0` : ''} (limits ${GUARD_MAX_CHANGES} / ${GUARD_MAX_TO_ZERO}).`;
     }
     run.items = plan;
-    run.payload = buildPayload(id, plan, report.targetLocation.id);
-    run.summary = {
+    const now = () => new Date().toISOString();
+    const counts = () => ({
       total: plan.length,
-      set: sets.length,
-      baseline: sets.filter(p => p.baseline).length,
+      set: plan.filter(p => ['set', 'updated', 'failed', 'held'].includes(p.action)).length,
+      baseline: plan.filter(p => p.baseline && ['set', 'updated', 'failed', 'held'].includes(p.action)).length,
       changed: nonBaseline.length,
+      updated: plan.filter(p => p.action === 'updated').length,
+      failed: plan.filter(p => p.action === 'failed').length,
+      held: plan.filter(p => p.action === 'held').length,
       none: plan.filter(p => p.action === 'none').length,
       skip: plan.filter(p => p.action === 'skip').length,
       toZero: sets.filter(p => p.qty === 0 && (p.onHand ?? 0) > 0).length,
       onHandBefore: plan.reduce((a, p) => a + (p.onHand ?? 0), 0),
-      onHandAfter: plan.reduce((a, p) => a + (p.action === 'set' ? p.qty : (p.onHand ?? 0)), 0),
-    };
-    // Dry memory = what the sheet showed this run, so the next dry run shows only real sheet changes
-    const now = new Date().toISOString();
-    for (const p of plan) if (p.qty != null && p.action !== 'skip') memory[p.sku] = { value: p.qty, at: now };
-    run.result = 'ok';
-    run.message = `Dry run: would set ${sets.length} (${run.summary.baseline} baseline, ${nonBaseline.length} sheet changes), ${run.summary.none} unchanged, ${run.summary.skip} skipped. Nothing written.`;
-    state.lastSuccessAt = now;
+      onHandAfter: plan.reduce((a, p) => a + (['set', 'updated'].includes(p.action) ? p.qty : (p.onHand ?? 0)), 0),
+    });
+
+    if (mode === 'dry') {
+      run.payload = buildPayload(id, plan, report.targetLocation.id);
+      for (const p of plan) if (p.qty != null && p.action !== 'skip') memory[p.sku] = { value: p.qty, at: now() };
+      run.summary = counts();
+      run.result = 'ok';
+      run.message = `Dry run: would update ${sets.length} (${run.summary.baseline} first-run, ${nonBaseline.length} sheet changes), ${run.summary.none} unchanged, ${run.summary.skip} skipped. Nothing written.`;
+    } else if (run.guard && !force) {
+      // LIVE, unusual run: write nothing, wait for approval in the dashboard
+      for (const p of sets) { p.action = 'held'; p.reason += ' (held: unusual run)'; }
+      run.summary = counts();
+      run.result = 'held';
+      run.message = `Held: ${run.guard} Nothing written. Check the sheet, then press "Apply anyway" if it is correct.`;
+    } else {
+      // LIVE: write each changed SKU, 2 at a time
+      await runLimited(sets, 2, async p => {
+        const w = await writeItem(id, p, report.targetLocation.id);
+        p.write = w;
+        if (w.ok) { p.action = 'updated'; memory[p.sku] = { value: p.qty, at: now() }; }
+        else { p.action = 'failed'; p.problems = [...p.problems, `Shopify: ${w.error}`]; }   // not remembered: retried next run
+      });
+      // Remember the sheet value for unchanged rows too (incl. "Shopify already matches"), so a later Shopify sale is never mistaken for a sheet change
+      for (const p of plan) if (p.action === 'none' && p.qty != null && memory[p.sku]?.value !== p.qty) memory[p.sku] = { value: p.qty, at: now() };
+      run.summary = counts();
+      run.result = run.summary.failed ? 'partial' : 'ok';
+      run.message = `Updated ${run.summary.updated} in Shopify${run.summary.failed ? `, ${run.summary.failed} failed (retried next run)` : ''}, ${run.summary.none} unchanged, ${run.summary.skip} skipped.${force && run.guard ? ' Applied after approval.' : ''}`;
+    }
+    if (run.result !== 'held') state.lastSuccessAt = now();
   } catch (e) {
     run.result = 'failed';
     run.message = e.message;
@@ -500,9 +573,9 @@ async function runSync({ trigger = 'manual' } = {}) {
   return run;
 }
 
-// ---------- scheduler (dry only in Phase 1) ----------
+// ---------- scheduler ----------
 function nextRunAt() {
-  if (!state.settings.enabled || process.env.SHEET_SYNC_DISABLED === 'true') return null;
+  if (!state.settings.enabled || liveBlocked()) return null;
   const last = state.lastRunAt ? Date.parse(state.lastRunAt) : 0;
   return new Date(Math.max(Date.now(), last + state.settings.intervalHours * 3600e3)).toISOString();
 }
@@ -534,12 +607,18 @@ function createRouter() {
   router.get('/api/sheet-stock/last', (req, res) => res.json({ report: last }));
 
   router.post('/api/sheet-stock/dry-run', async (req, res) => {
-    try { res.json(await exclusive(function dryRun() { return runSync({ trigger: 'manual' }); })); }
+    try { res.json(await exclusive(function dryRun() { return runSync({ trigger: 'manual', mode: 'dry' }); })); }
+    catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  });
+
+  // Run now in the current mode. force: apply a run the guard held back.
+  router.post('/api/sheet-stock/sync', async (req, res) => {
+    try { res.json(await exclusive(function sync() { return runSync({ trigger: req.body?.force ? 'manual (approved)' : 'manual', force: !!req.body?.force }); })); }
     catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 
   router.get('/api/sheet-stock/status', (req, res) => res.json({
-    phase: 1, mode: 'dry', settings: state.settings, intervals: INTERVALS,
+    mode: state.settings.mode, settings: state.settings, intervals: INTERVALS, apiVersion: apiVersion(), liveMemory: Object.keys(state.live.lastApplied).length,
     disabledByEnv: process.env.SHEET_SYNC_DISABLED === 'true',
     persistent: PERSISTENT, dataDir: DATA_DIR,
     running, lastRunAt: state.lastRunAt, lastSuccessAt: state.lastSuccessAt, nextRunAt: nextRunAt(),
@@ -555,8 +634,12 @@ function createRouter() {
   });
 
   router.post('/api/sheet-stock/settings', (req, res) => {
-    const { enabled, intervalHours } = req.body || {};
+    const { enabled, intervalHours, mode } = req.body || {};
     if (enabled !== undefined) state.settings.enabled = !!enabled;
+    if (mode !== undefined) {
+      if (!['dry', 'live'].includes(mode)) return res.status(400).json({ error: 'Mode must be dry or live' });
+      state.settings.mode = mode;
+    }
     if (intervalHours !== undefined) {
       const h = Number(intervalHours);
       if (!INTERVALS.includes(h)) return res.status(400).json({ error: `Interval must be one of ${INTERVALS.join(', ')} hours` });
@@ -576,4 +659,4 @@ function createRouter() {
   return router;
 }
 
-module.exports = { createRouter, validate, runSync, planItem, buildPayload, parseQty, labelMatches, checkSheet, sizeValue };
+module.exports = { createRouter, validate, runSync, planItem, buildPayload, writeItem, parseQty, labelMatches, checkSheet, sizeValue };

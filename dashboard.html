@@ -124,7 +124,7 @@
   .banner { border-radius: var(--radius); padding: 12px 14px; font-weight: 600; }
   .banner.info { background: var(--blue-soft); color: var(--blue-d); }
   .banner.err { background: var(--err-soft); color: var(--err); }
-  .st { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 99px; }
+  .st { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 99px; white-space: nowrap; }
   .st.ready { background: var(--green-soft); color: var(--green-d); }
   .st.blocked { background: var(--err-soft); color: var(--err); }
   .st.set { background: var(--blue-soft); color: var(--blue-d); }
@@ -132,6 +132,8 @@
   .st.skip { background: var(--err-soft); color: var(--err); }
   .st.ok { background: var(--green-soft); color: var(--green-d); }
   .st.failed { background: var(--err-soft); color: var(--err); }
+  .st.updated { background: var(--green-soft); color: var(--green-d); }
+  .st.held, .st.partial { background: #FFF1DC; color: var(--warn); }
   details.panel > summary { font-weight: 600; cursor: pointer; }
   .lab-ok { color: var(--green-d); } .lab-bad { color: var(--err); font-weight: 600; } .lab-moved { color: var(--warn); font-weight: 600; }
   #sheet-body td { font-size: 13px; }
@@ -268,29 +270,36 @@
     </div>
   </section>
   <section id="tab-sheet" hidden style="display:grid;gap:16px">
-    <div class="banner info">Dry run phase: the sync plans exactly what it would update in Shopify, but nothing is written.</div>
+    <div class="banner info" id="sheet-banner" style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"></div>
     <div class="panel">
       <div class="row" style="align-items:center">
         <label class="field" style="flex-direction:row;align-items:center;gap:8px">
-          <input type="checkbox" id="sch-enabled"> Run dry runs automatically
+          <input type="checkbox" id="sch-enabled"> Run automatically
         </label>
         <label class="field">Every
           <select id="sch-interval"></select>
         </label>
-        <button class="btn secondary" id="sch-save">Save schedule</button>
+        <label class="field">Mode
+          <select id="sch-mode">
+            <option value="live">Live: update Shopify</option>
+            <option value="dry">Dry run: preview only</option>
+          </select>
+        </label>
+        <button class="btn secondary" id="sch-save">Save</button>
       </div>
       <p class="hint" id="sch-info" style="margin:10px 0 0"></p>
       <p class="note warn" id="sch-storage" hidden></p>
     </div>
     <div class="panel">
       <div class="row">
-        <button class="btn go" id="sheet-dry">Dry run now</button>
+        <button class="btn go" id="sheet-run">Update Shopify now</button>
+        <button class="btn secondary" id="sheet-dry">Preview (dry run)</button>
         <button class="btn" id="sheet-validate">Validate mapping only</button>
         <button class="btn secondary" id="sheet-csv" disabled>Download CSV</button>
         <label class="field">Show
           <select id="sheet-filter">
             <option value="all">All 80</option>
-            <option value="set">Would update</option>
+            <option value="set">Updated / would update</option>
             <option value="none">No change</option>
             <option value="blocked">Skipped / blocked</option>
             <option value="warn">With warnings</option>
@@ -299,13 +308,13 @@
       </div>
       <p id="sheet-status" class="status"></p>
     </div>
-    <div id="sheet-alarm" class="banner err" hidden></div>
+    <div id="sheet-alarm" class="banner err" hidden style="display:flex;gap:14px;align-items:center;flex-wrap:wrap"><span id="sheet-alarm-text"></span><button class="btn" id="sheet-force" hidden>Apply anyway</button></div>
     <div class="chips" id="sheet-chips" hidden></div>
     <details class="panel" id="sheet-history-wrap" hidden>
-      <summary>Run history</summary>
+      <summary>Log (only needed if something goes wrong)</summary>
       <div class="table-wrap" style="margin-top:10px">
         <table style="min-width:760px">
-          <thead><tr><th>When</th><th>Trigger</th><th>Result</th><th>Would update</th><th>No change</th><th>Skipped</th><th></th></tr></thead>
+          <thead><tr><th>When</th><th>Mode</th><th>Trigger</th><th>Result</th><th>Updated</th><th>No change</th><th>Skipped</th><th></th></tr></thead>
           <tbody id="sheet-history"></tbody>
         </table>
       </div>
@@ -837,17 +846,25 @@ function renderSchedule() {
   const st = sheetStatus;
   $('#sch-interval').innerHTML = st.intervals.map(h => `<option value="${h}" ${h === st.settings.intervalHours ? 'selected' : ''}>${h} hour${h > 1 ? 's' : ''}</option>`).join('');
   $('#sch-enabled').checked = !!st.settings.enabled;
+  $('#sch-mode').value = st.settings.mode;
+  const live = st.settings.mode === 'live';
+  $('#sheet-run').textContent = live ? 'Update Shopify now' : 'Dry run now';
+  $('#sheet-banner').className = 'banner ' + (live ? 'info' : 'info');
+  $('#sheet-banner').innerHTML = live
+    ? `<span>✅ Live: Shopify stock is updated from Main Sheet ${st.settings.enabled ? `every ${st.settings.intervalHours} hour${st.settings.intervalHours > 1 ? 's' : ''}` : 'only when you press “Update Shopify now” (automatic is off)'}.</span>`
+    : `<span>Preview mode: nothing is written to Shopify.</span><button class="btn go" id="go-live">Turn on live updates</button>`;
+  if (!live) $('#go-live').addEventListener('click', goLive);
   $('#sch-info').textContent = (st.disabledByEnv ? 'Turned off by SHEET_SYNC_DISABLED. ' : '') +
-    `Last run ${ukTime(st.lastRunAt)} · last successful ${ukTime(st.lastSuccessAt)} · next ${st.nextRunAt ? ukTime(st.nextRunAt) : 'not scheduled'}` +
+    `Last run ${ukTime(st.lastRunAt)} · last successful ${ukTime(st.lastSuccessAt)} · next ${st.nextRunAt ? ukTime(st.nextRunAt) : 'not scheduled'} · Shopify API ${st.apiVersion || '?'}` +
     (st.running ? ` · running now (${st.running})` : '');
   $('#sch-storage').hidden = st.persistent;
   $('#sch-storage').textContent = 'No Railway Volume attached: history and "last seen" values are lost on every deploy or restart.';
   const runs = st.runs || [];
   $('#sheet-history-wrap').hidden = !runs.length;
   $('#sheet-history').innerHTML = runs.map(r => `<tr>
-    <td>${ukTime(r.startedAt)}</td><td>${esc(r.trigger)}</td>
-    <td><span class="st ${r.result === 'ok' ? 'ok' : 'failed'}">${r.result === 'ok' ? 'OK' : 'Failed'}</span>${r.guard ? ' <span class="st skip">Guard</span>' : ''}${r.result !== 'ok' ? `<div class="note err">${esc(r.message)}</div>` : ''}</td>
-    <td>${r.summary ? `${r.summary.set}${r.summary.baseline ? ` <span class="hint">(${r.summary.baseline} baseline)</span>` : ''}` : '–'}</td>
+    <td>${ukTime(r.startedAt)}</td><td>${r.mode === 'live' ? 'Live' : 'Dry run'}</td><td>${esc(r.trigger)}</td>
+    <td><span class="st ${r.result}">${{ ok: 'OK', failed: 'Failed', held: 'Held', partial: 'Partly failed' }[r.result] || esc(r.result)}</span>${r.result !== 'ok' ? `<div class="note ${r.result === 'failed' ? 'err' : 'warn'}">${esc(r.message)}</div>` : ''}</td>
+    <td>${r.summary ? (r.mode === 'live' ? `${r.summary.updated ?? 0}${r.summary.failed ? ` <span class="note err">(${r.summary.failed} failed)</span>` : ''}` : `${r.summary.set} <span class="hint">(would)</span>`) : '–'}</td>
     <td>${r.summary?.none ?? '–'}</td><td>${r.summary?.skip ?? '–'}</td>
     <td>${r.summary ? `<button class="btn secondary view-run" data-id="${esc(r.id)}" style="padding:4px 10px">View</button>` : ''}</td></tr>`).join('');
 }
@@ -857,24 +874,46 @@ $('#sheet-history').addEventListener('click', async e => {
   catch (err) { setStatus('#sheet-status', err.message, true); }
 });
 $('#sch-save').addEventListener('click', async () => {
+  const mode = $('#sch-mode').value;
+  if (mode === 'live' && sheetStatus.settings.mode !== 'live' && !confirm('Switch to Live? Shopify stock will be updated from Main Sheet.')) return;
   try {
-    await api('sheet-stock/settings', { method: 'POST', body: JSON.stringify({ enabled: $('#sch-enabled').checked, intervalHours: Number($('#sch-interval').value) }) });
+    await api('sheet-stock/settings', { method: 'POST', body: JSON.stringify({ enabled: $('#sch-enabled').checked, intervalHours: Number($('#sch-interval').value), mode }) });
     sheetStatus = await api('sheet-stock/status'); renderSchedule();
-    setStatus('#sheet-status', $('#sch-enabled').checked ? 'Schedule saved. Dry runs will run automatically.' : 'Schedule saved. Automatic dry runs are off.');
+    setStatus('#sheet-status', `Saved: ${mode === 'live' ? 'Live' : 'Dry run'}, ${$('#sch-enabled').checked ? `every ${$('#sch-interval').value} hour(s)` : 'automatic off'}.`);
   } catch (e) { setStatus('#sheet-status', e.message, true); }
 });
-async function sheetAction(btn, path, label, kind) {
+// One click: switch to Live, run the first update now, then every hour (or the chosen interval)
+async function goLive() {
+  const latest = sheetStatus.latest;
+  const n = latest?.summary ? latest.summary.set : null;
+  if (!confirm(`Turn on live updates?\n\nShopify "on hand" will be set from Main Sheet now${n != null ? ` (about ${n} SKUs differ today)` : ''}, then automatically every ${$('#sch-interval').value} hour(s).\nAfter this first update, only rows that change in the sheet are updated.`)) return;
+  const btn = $('#go-live'); btn.disabled = true;
+  try {
+    await api('sheet-stock/settings', { method: 'POST', body: JSON.stringify({ mode: 'live', enabled: true, intervalHours: Number($('#sch-interval').value) }) });
+    sheetStatus = await api('sheet-stock/status'); renderSchedule();
+    await sheetAction($('#sheet-run'), 'sheet-stock/sync', 'First live update: setting Shopify stock from Main Sheet… (about a minute)', 'run');
+  } catch (e) { setStatus('#sheet-status', e.message, true); btn.disabled = false; }
+}
+$('#sheet-force').addEventListener('click', async e => {
+  if (!confirm('Apply the held changes to Shopify? Only do this if the sheet is correct.')) return;
+  await sheetAction(e.currentTarget, 'sheet-stock/sync', 'Applying held changes…', 'run', { force: true });
+});
+async function sheetAction(btn, path, label, kind, body = {}) {
   btn.disabled = true;
   setStatus('#sheet-status', label);
   try {
-    const r = await api(path, { method: 'POST', body: '{}' });
+    const r = await api(path, { method: 'POST', body: JSON.stringify(body) });
     sheetReport = { kind, ...r };
     renderSheet();
     sheetStatus = await api('sheet-stock/status'); renderSchedule();
   } catch (e) { setStatus('#sheet-status', e.message, true); }
   finally { btn.disabled = false; }
 }
-$('#sheet-dry').addEventListener('click', e => sheetAction(e.currentTarget, 'sheet-stock/dry-run', 'Dry run: reading Main Sheet and Shopify… (about 20–40 seconds)', 'run'));
+$('#sheet-run').addEventListener('click', e => {
+  const live = sheetStatus?.settings.mode === 'live';
+  sheetAction(e.currentTarget, 'sheet-stock/sync', live ? 'Updating Shopify from Main Sheet… (about 20–60 seconds)' : 'Dry run: reading Main Sheet and Shopify…', 'run');
+});
+$('#sheet-dry').addEventListener('click', e => sheetAction(e.currentTarget, 'sheet-stock/dry-run', 'Preview: reading Main Sheet and Shopify… (about 20–40 seconds)', 'run'));
 $('#sheet-validate').addEventListener('click', e => sheetAction(e.currentTarget, 'sheet-stock/validate', 'Reading Main Sheet and checking 80 SKUs in Shopify…', 'validate'));
 $('#sheet-filter').addEventListener('change', () => sheetReport && renderSheet());
 
@@ -894,19 +933,25 @@ function notesList(i) {
 function renderSheet() {
   const r = sheetReport;
   const isRun = r.kind === 'run';
-  if (isRun && r.result !== 'ok') {
-    setStatus('#sheet-status', `Dry run ${ukTime(r.startedAt)} failed: ${r.message}`, true);
+  const runName = r.mode === 'live' ? 'Live update' : 'Dry run';
+  if (isRun && r.result === 'failed') {
+    setStatus('#sheet-status', `${runName} ${ukTime(r.startedAt)} failed: ${r.message}`, true);
     $('#sheet-wrap').hidden = true; $('#sheet-chips').hidden = true; $('#sheet-payload-wrap').hidden = true; return;
   }
   setStatus('#sheet-status', isRun
-    ? `Dry run ${ukTime(r.startedAt)} (${r.trigger}) · ${r.message}`
+    ? `${runName} ${ukTime(r.startedAt)} (${r.trigger}) · ${r.message}`
     : `Validation ${ukTime(r.ranAt)} · "${r.sheet.tab.title}" tab, ${r.sheet.rowsRead} rows read · no Shopify writes`);
-  $('#sheet-alarm').hidden = !(r.guard || r.layoutAlarm);
-  $('#sheet-alarm').textContent = r.guard || r.layoutAlarm || '';
+  const held = isRun && r.result === 'held';
+  $('#sheet-alarm').hidden = !(held || r.layoutAlarm || (isRun && r.guard && r.mode === 'dry'));
+  $('#sheet-alarm-text').textContent = held ? r.message : (r.layoutAlarm || (r.guard ? r.guard + ' A live run would hold these for approval.' : ''));
+  $('#sheet-force').hidden = !(held && r.id === sheetStatus?.latest?.id);
 
   const s = r.summary;
   $('#sheet-chips').hidden = false;
-  $('#sheet-chips').innerHTML = (isRun ? [
+  $('#sheet-chips').innerHTML = (isRun && r.mode === 'live' ? [
+    ['Updated in Shopify', s.updated, 'good'], ['Failed', s.failed, s.failed ? 'bad' : ''], ['Held', s.held, s.held ? 'bad' : ''],
+    ['No change', s.none, ''], ['Skipped', s.skip, s.skip ? 'bad' : ''], ['On hand before → after', `${s.onHandBefore} → ${s.onHandAfter}`, ''],
+  ] : isRun ? [
     ['Would update', s.set, ''], ['First-run baseline', s.baseline, ''], ['Sheet changes', s.changed, ''],
     ['No change', s.none, 'good'], ['Skipped', s.skip, s.skip ? 'bad' : ''], ['Would drop to 0', s.toZero, s.toZero ? 'bad' : ''],
     ['On hand now → after', `${s.onHandBefore} → ${s.onHandAfter}`, ''],
@@ -915,11 +960,11 @@ function renderSheet() {
     ['Moved rows', s.moved, s.moved ? 'bad' : ''], ['Found in Shopify', `${s.shopifyFound}/${s.total}`, ''], ['With warnings', s.withWarnings, ''],
   ]).map(([l, v, c]) => `<div class="chip ${c}"><small>${l}</small><b>${esc(v)}</b></div>`).join('');
 
-  $('#sheet-payload-wrap').hidden = !isRun;
-  if (isRun) {
+  $('#sheet-payload-wrap').hidden = !(isRun && r.payload);
+  if (isRun && r.payload) {
     const p = r.payload || { batches: [] };
     $('#sheet-payload').textContent = p.batches.length
-      ? `API version ${p.apiVersion || '(not set)'} · ${p.batches.length} call(s)\n\n${p.mutation}\n\n${p.batches.map(b => JSON.stringify(b, null, 2)).join('\n\n')}`
+      ? `API version ${p.apiVersion || '(not set)'} · ${p.batches.length} call(s), one per SKU\n\n${p.mutation}\n\n${p.batches.map(b => JSON.stringify(b, null, 2)).join('\n\n')}`
       : 'Nothing to send: no SKU would change.';
   }
 
@@ -933,26 +978,29 @@ function renderSheet() {
   } else $('#sheet-locs').hidden = true;
 
   const f = $('#sheet-filter').value;
-  const items = r.items.filter(i => {
+  const ORDER = { failed: 0, held: 1, updated: 2, set: 3, skip: 4, none: 5 };
+  const items = [...r.items].sort((x, y) => isRun ? (ORDER[x.action] ?? 9) - (ORDER[y.action] ?? 9) : 0).filter(i => {
     if (f === 'all') return true;
     if (f === 'warn') return (i.warnings || []).length;
     if (f === 'blocked') return isRun ? i.action === 'skip' : i.status === 'blocked';
-    if (f === 'set' || f === 'none') return isRun ? i.action === f : i.status === 'ready';
+    if (f === 'set') return isRun ? ['set', 'updated', 'failed', 'held'].includes(i.action) : i.status === 'ready';
+    if (f === 'none') return isRun ? i.action === 'none' : i.status === 'ready';
     return true;
   });
   $('#sheet-wrap').hidden = false;
   $('#sheet-csv').disabled = false;
   $('#sheet-head').innerHTML = isRun
-    ? '<tr><th>Action</th><th>Shopify SKU</th><th>Sheet cell</th><th>Sheet value</th><th>Shopify on hand now</th><th>Would set on hand</th><th>Why</th><th>Problems and notes</th></tr>'
+    ? `<tr><th>Action</th><th>Shopify SKU</th><th>Sheet cell</th><th>Sheet value</th><th>Shopify on hand before</th><th>${r.mode === 'live' ? 'Set on hand' : 'Would set on hand'}</th><th>Why</th><th>Problems and notes</th></tr>`
     : '<tr><th>Status</th><th>Shopify SKU</th><th>Sheet cell</th><th>Label found in sheet</th><th>Sheet value</th><th>Would set on hand</th><th>Shopify now (on hand / available / committed)</th><th>Problems and notes</th></tr>';
-  const ACT = { set: 'Would update', none: 'No change', skip: 'Skipped' };
+  const ACT = { set: 'Would update', none: 'No change', skip: 'Skipped', updated: 'Updated', failed: 'Failed', held: 'Held' };
+  const changing = a => ['set', 'updated', 'failed', 'held'].includes(a);
   $('#sheet-body').innerHTML = items.map(i => isRun ? `<tr>
       <td><span class="st ${i.action}">${ACT[i.action]}</span></td>
       <td><div class="sku mono">${esc(i.sku)}</div>${i.product ? `<div class="note">${esc(i.product)}</div>` : ''}</td>
       <td><b>${esc(i.cell)}</b><div class="note">${esc(i.labelFound || '')}</div></td>
       <td class="mono">${blankCell(i.sheetValue)}</td>
       <td>${i.onHand ?? '–'}${i.committed ? `<div class="note">${i.committed} committed</div>` : ''}</td>
-      <td><b>${i.action === 'set' ? i.qty : '–'}</b>${i.action === 'set' && i.onHand != null ? `<div class="note ${i.qty < i.onHand ? 'err' : ''}">${i.qty - i.onHand > 0 ? '+' : ''}${i.qty - i.onHand}</div>` : ''}</td>
+      <td><b>${changing(i.action) ? i.qty : '–'}</b>${changing(i.action) && i.onHand != null ? `<div class="note ${i.qty < i.onHand ? 'err' : ''}">${i.qty - i.onHand > 0 ? '+' : ''}${i.qty - i.onHand}</div>` : ''}</td>
       <td class="note">${esc(i.reason)}</td>
       <td>${notesList(i) || '<span class="hint">–</span>'}</td>
     </tr>` : `<tr>
@@ -971,8 +1019,8 @@ $('#sheet-csv').addEventListener('click', () => {
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
   let head, lines;
   if (r.kind === 'run') {
-    head = ['action', 'shopify_sku', 'group', 'sheet_cell', 'label_found', 'sheet_value', 'shopify_on_hand_now', 'committed', 'would_set_on_hand', 'reason', 'problems', 'warnings'];
-    lines = r.items.map(i => [i.action, i.sku, i.group, i.cell, i.labelFound, i.sheetValue, i.onHand, i.committed, i.action === 'set' ? i.qty : '', i.reason, (i.problems || []).join(' | '), (i.warnings || []).join(' | ')]);
+    head = ['action', 'shopify_sku', 'group', 'sheet_cell', 'label_found', 'sheet_value', 'shopify_on_hand_before', 'committed', 'set_on_hand', 'reason', 'problems', 'warnings'];
+    lines = r.items.map(i => [i.action, i.sku, i.group, i.cell, i.labelFound, i.sheetValue, i.onHand, i.committed, ['set', 'updated', 'failed', 'held'].includes(i.action) ? i.qty : '', i.reason, (i.problems || []).join(' | '), (i.warnings || []).join(' | ')]);
   } else {
     head = ['status', 'shopify_sku', 'group', 'sheet_cell', 'used_cell', 'moved_to', 'label_found', 'expected_source', 'size_header', 'sheet_value', 'proposed_on_hand', 'shopify_product', 'locations (on_hand/available/committed)', 'problems', 'warnings'];
     lines = r.items.map(i => [i.status, i.sku, i.group, i.cell, i.usedCell, i.movedTo, i.labelFound, i.source, i.sizeHeader, i.sheetValue, i.proposedOnHand,
@@ -982,7 +1030,7 @@ $('#sheet-csv').addEventListener('click', () => {
   const blob = new Blob(['﻿' + [head.map(q).join(','), ...lines.map(l => l.map(q).join(','))].join('\r\n')], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `sheet-stock-${r.kind === 'run' ? 'dry-run' : 'validation'}-${stamp}.csv`;
+  a.download = `sheet-stock-${r.kind === 'run' ? (r.mode === 'live' ? 'live' : 'dry-run') : 'validation'}-${stamp}.csv`;
   a.click(); URL.revokeObjectURL(a.href);
 });
 
