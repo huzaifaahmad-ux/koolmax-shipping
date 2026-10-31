@@ -127,6 +127,12 @@
   .st { display: inline-block; font-size: 11px; font-weight: 700; padding: 2px 9px; border-radius: 99px; }
   .st.ready { background: var(--green-soft); color: var(--green-d); }
   .st.blocked { background: var(--err-soft); color: var(--err); }
+  .st.set { background: var(--blue-soft); color: var(--blue-d); }
+  .st.none { background: #EEF1F4; color: var(--muted); }
+  .st.skip { background: var(--err-soft); color: var(--err); }
+  .st.ok { background: var(--green-soft); color: var(--green-d); }
+  .st.failed { background: var(--err-soft); color: var(--err); }
+  details.panel > summary { font-weight: 600; cursor: pointer; }
   .lab-ok { color: var(--green-d); } .lab-bad { color: var(--err); font-weight: 600; } .lab-moved { color: var(--warn); font-weight: 600; }
   #sheet-body td { font-size: 13px; }
   #sheet-body ul { margin: 0; padding-left: 16px; }
@@ -262,32 +268,56 @@
     </div>
   </section>
   <section id="tab-sheet" hidden style="display:grid;gap:16px">
-    <div class="banner info">Phase 0: read-only. This checks the live Google Sheet and Shopify and shows what would be updated. Nothing is written to Shopify.</div>
+    <div class="banner info">Dry run phase: the sync plans exactly what it would update in Shopify, but nothing is written.</div>
+    <div class="panel">
+      <div class="row" style="align-items:center">
+        <label class="field" style="flex-direction:row;align-items:center;gap:8px">
+          <input type="checkbox" id="sch-enabled"> Run dry runs automatically
+        </label>
+        <label class="field">Every
+          <select id="sch-interval"></select>
+        </label>
+        <button class="btn secondary" id="sch-save">Save schedule</button>
+      </div>
+      <p class="hint" id="sch-info" style="margin:10px 0 0"></p>
+      <p class="note warn" id="sch-storage" hidden></p>
+    </div>
     <div class="panel">
       <div class="row">
-        <button class="btn" id="sheet-validate">Validate mapping now</button>
+        <button class="btn go" id="sheet-dry">Dry run now</button>
+        <button class="btn" id="sheet-validate">Validate mapping only</button>
         <button class="btn secondary" id="sheet-csv" disabled>Download CSV</button>
         <label class="field">Show
           <select id="sheet-filter">
             <option value="all">All 80</option>
-            <option value="blocked">Blocked only</option>
-            <option value="ready">Ready only</option>
+            <option value="set">Would update</option>
+            <option value="none">No change</option>
+            <option value="blocked">Skipped / blocked</option>
             <option value="warn">With warnings</option>
           </select>
         </label>
       </div>
-      <p class="hint">Reads only the first tab, “Main Sheet”. Each mapped cell is checked against its product label and size header, then matched to the exact Shopify SKU.</p>
       <p id="sheet-status" class="status"></p>
     </div>
     <div id="sheet-alarm" class="banner err" hidden></div>
     <div class="chips" id="sheet-chips" hidden></div>
+    <details class="panel" id="sheet-history-wrap" hidden>
+      <summary>Run history</summary>
+      <div class="table-wrap" style="margin-top:10px">
+        <table style="min-width:760px">
+          <thead><tr><th>When</th><th>Trigger</th><th>Result</th><th>Would update</th><th>No change</th><th>Skipped</th><th></th></tr></thead>
+          <tbody id="sheet-history"></tbody>
+        </table>
+      </div>
+    </details>
+    <details class="panel" id="sheet-payload-wrap" hidden>
+      <summary>Exact Shopify call a live run would send</summary>
+      <pre class="mono" id="sheet-payload" style="max-height:360px;overflow:auto;margin:10px 0 0;white-space:pre-wrap"></pre>
+    </details>
     <div class="panel" id="sheet-locs" hidden></div>
     <div class="table-wrap" id="sheet-wrap" hidden>
       <table>
-        <thead><tr>
-          <th>Status</th><th>Shopify SKU</th><th>Sheet cell</th><th>Label found in sheet</th>
-          <th>Sheet value</th><th>Would set on hand</th><th>Shopify now (on hand / available / committed)</th><th>Problems and notes</th>
-        </tr></thead>
+        <thead id="sheet-head"></thead>
         <tbody id="sheet-body"></tbody>
       </table>
     </div>
@@ -342,7 +372,7 @@ function selectTab(name) {
   $('#tab-stock').hidden = name !== 'stock';
   $('#tab-sheet').hidden = name !== 'sheet';
   $('#page-pill').textContent = name === 'sheet' ? 'Google Sheet → Shopify' : 'Combisteel → Shopify';
-  if (name === 'sheet' && !sheetReport) loadLastSheetReport();
+  if (name === 'sheet') loadLastSheetReport();
 }
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => { if (key) selectTab(b.dataset.tab); }));
 
@@ -790,20 +820,62 @@ $('#run-sync').addEventListener('click', async () => {
   finally { btn.disabled = false; }
 });
 
-// ---------- Sheet stock (Phase 0, read-only) ----------
-let sheetReport = null;
+// ---------- Sheet stock (dry run phase, read-only) ----------
+let sheetReport = null;      // what the table shows: a validation report or a dry run
+let sheetStatus = null;
+const ukTime = t => t ? new Date(t).toLocaleString('en-GB', { timeZone: 'Europe/London', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '–';
+
 async function loadLastSheetReport() {
-  try { const { report } = await api('sheet-stock/last'); if (report) { sheetReport = report; renderSheet(); } } catch (e) {}
-}
-$('#sheet-validate').addEventListener('click', async () => {
-  const btn = $('#sheet-validate'); btn.disabled = true;
-  setStatus('#sheet-status', 'Reading Main Sheet and checking 80 SKUs in Shopify… (about 20–40 seconds)');
   try {
-    sheetReport = await api('sheet-stock/validate', { method: 'POST', body: '{}' });
+    sheetStatus = await api('sheet-stock/status');
+    renderSchedule();
+    if (sheetStatus.latest) { sheetReport = { kind: 'run', ...sheetStatus.latest }; renderSheet(); }
+    else { const { report } = await api('sheet-stock/last'); if (report) { sheetReport = { kind: 'validate', ...report }; renderSheet(); } }
+  } catch (e) { setStatus('#sheet-status', e.message, true); }
+}
+function renderSchedule() {
+  const st = sheetStatus;
+  $('#sch-interval').innerHTML = st.intervals.map(h => `<option value="${h}" ${h === st.settings.intervalHours ? 'selected' : ''}>${h} hour${h > 1 ? 's' : ''}</option>`).join('');
+  $('#sch-enabled').checked = !!st.settings.enabled;
+  $('#sch-info').textContent = (st.disabledByEnv ? 'Turned off by SHEET_SYNC_DISABLED. ' : '') +
+    `Last run ${ukTime(st.lastRunAt)} · last successful ${ukTime(st.lastSuccessAt)} · next ${st.nextRunAt ? ukTime(st.nextRunAt) : 'not scheduled'}` +
+    (st.running ? ` · running now (${st.running})` : '');
+  $('#sch-storage').hidden = st.persistent;
+  $('#sch-storage').textContent = 'No Railway Volume attached: history and "last seen" values are lost on every deploy or restart.';
+  const runs = st.runs || [];
+  $('#sheet-history-wrap').hidden = !runs.length;
+  $('#sheet-history').innerHTML = runs.map(r => `<tr>
+    <td>${ukTime(r.startedAt)}</td><td>${esc(r.trigger)}</td>
+    <td><span class="st ${r.result === 'ok' ? 'ok' : 'failed'}">${r.result === 'ok' ? 'OK' : 'Failed'}</span>${r.guard ? ' <span class="st skip">Guard</span>' : ''}${r.result !== 'ok' ? `<div class="note err">${esc(r.message)}</div>` : ''}</td>
+    <td>${r.summary ? `${r.summary.set}${r.summary.baseline ? ` <span class="hint">(${r.summary.baseline} baseline)</span>` : ''}` : '–'}</td>
+    <td>${r.summary?.none ?? '–'}</td><td>${r.summary?.skip ?? '–'}</td>
+    <td>${r.summary ? `<button class="btn secondary view-run" data-id="${esc(r.id)}" style="padding:4px 10px">View</button>` : ''}</td></tr>`).join('');
+}
+$('#sheet-history').addEventListener('click', async e => {
+  const b = e.target.closest('.view-run'); if (!b) return;
+  try { sheetReport = { kind: 'run', ...(await api('sheet-stock/runs/' + b.dataset.id)) }; renderSheet(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  catch (err) { setStatus('#sheet-status', err.message, true); }
+});
+$('#sch-save').addEventListener('click', async () => {
+  try {
+    await api('sheet-stock/settings', { method: 'POST', body: JSON.stringify({ enabled: $('#sch-enabled').checked, intervalHours: Number($('#sch-interval').value) }) });
+    sheetStatus = await api('sheet-stock/status'); renderSchedule();
+    setStatus('#sheet-status', $('#sch-enabled').checked ? 'Schedule saved. Dry runs will run automatically.' : 'Schedule saved. Automatic dry runs are off.');
+  } catch (e) { setStatus('#sheet-status', e.message, true); }
+});
+async function sheetAction(btn, path, label, kind) {
+  btn.disabled = true;
+  setStatus('#sheet-status', label);
+  try {
+    const r = await api(path, { method: 'POST', body: '{}' });
+    sheetReport = { kind, ...r };
     renderSheet();
+    sheetStatus = await api('sheet-stock/status'); renderSchedule();
   } catch (e) { setStatus('#sheet-status', e.message, true); }
   finally { btn.disabled = false; }
-});
+}
+$('#sheet-dry').addEventListener('click', e => sheetAction(e.currentTarget, 'sheet-stock/dry-run', 'Dry run: reading Main Sheet and Shopify… (about 20–40 seconds)', 'run'));
+$('#sheet-validate').addEventListener('click', e => sheetAction(e.currentTarget, 'sheet-stock/validate', 'Reading Main Sheet and checking 80 SKUs in Shopify…', 'validate'));
 $('#sheet-filter').addEventListener('change', () => sheetReport && renderSheet());
 
 function levelText(levels, target) {
@@ -813,55 +885,104 @@ function levelText(levels, target) {
     return `<div${isTarget ? ' style="font-weight:700"' : ''}>${esc(l.location)}: ${l.on_hand ?? '–'} / ${l.available ?? '–'} / ${l.committed ?? '–'}${isTarget ? ' ◀ target' : ''}</div>`;
   }).join('');
 }
+const blankCell = v => v === '' || v == null ? '<span class="hint">(blank)</span>' : esc(v);
+function notesList(i) {
+  const n = [...(i.problems || []).map(p => `<li class="note err">${esc(p)}</li>`), ...(i.warnings || []).map(w => `<li class="note warn">${esc(w)}</li>`),
+    i.note ? `<li class="note">${esc(i.note)}</li>` : ''].join('');
+  return n ? `<ul>${n}</ul>` : '';
+}
 function renderSheet() {
-  const r = sheetReport, s = r.summary;
-  setStatus('#sheet-status', `Checked ${new Date(r.ranAt).toLocaleString('en-GB')} · "${r.sheet.tab.title}" tab (gid ${r.sheet.tab.gid}), ${r.sheet.rowsRead} rows read · ${Math.round(r.tookMs / 1000)} s · no Shopify writes`);
-  $('#sheet-alarm').hidden = !r.layoutAlarm; $('#sheet-alarm').textContent = r.layoutAlarm || '';
+  const r = sheetReport;
+  const isRun = r.kind === 'run';
+  if (isRun && r.result !== 'ok') {
+    setStatus('#sheet-status', `Dry run ${ukTime(r.startedAt)} failed: ${r.message}`, true);
+    $('#sheet-wrap').hidden = true; $('#sheet-chips').hidden = true; $('#sheet-payload-wrap').hidden = true; return;
+  }
+  setStatus('#sheet-status', isRun
+    ? `Dry run ${ukTime(r.startedAt)} (${r.trigger}) · ${r.message}`
+    : `Validation ${ukTime(r.ranAt)} · "${r.sheet.tab.title}" tab, ${r.sheet.rowsRead} rows read · no Shopify writes`);
+  $('#sheet-alarm').hidden = !(r.guard || r.layoutAlarm);
+  $('#sheet-alarm').textContent = r.guard || r.layoutAlarm || '';
+
+  const s = r.summary;
   $('#sheet-chips').hidden = false;
-  $('#sheet-chips').innerHTML = [
+  $('#sheet-chips').innerHTML = (isRun ? [
+    ['Would update', s.set, ''], ['First-run baseline', s.baseline, ''], ['Sheet changes', s.changed, ''],
+    ['No change', s.none, 'good'], ['Skipped', s.skip, s.skip ? 'bad' : ''], ['Would drop to 0', s.toZero, s.toZero ? 'bad' : ''],
+    ['On hand now → after', `${s.onHandBefore} → ${s.onHandAfter}`, ''],
+  ] : [
     ['Ready', s.ready, 'good'], ['Blocked', s.blocked, s.blocked ? 'bad' : ''], ['Labels OK', `${s.labelOk}/${s.total}`, ''],
     ['Moved rows', s.moved, s.moved ? 'bad' : ''], ['Found in Shopify', `${s.shopifyFound}/${s.total}`, ''], ['With warnings', s.withWarnings, ''],
-  ].map(([l, v, c]) => `<div class="chip ${c}"><small>${l}</small><b>${esc(v)}</b></div>`).join('');
+  ]).map(([l, v, c]) => `<div class="chip ${c}"><small>${l}</small><b>${esc(v)}</b></div>`).join('');
 
-  const locs = r.locations;
-  $('#sheet-locs').hidden = false;
-  $('#sheet-locs').innerHTML = `<b>Shopify locations</b> ` + (locs.ok
-    ? locs.locations.map(l => `<span class="tag" style="margin-right:6px">${esc(l.name)}${l.isActive ? '' : ' (inactive)'} · ${esc(l.id.split('/').pop())}</span>`).join('')
-    : `<span class="note err">${esc(locs.error)}</span>`) +
-    `<p class="hint" style="margin:8px 0 0">${r.targetLocation
-      ? `Target location: <b>${esc(r.targetLocation.name || r.targetLocation.id)}</b> (SHEET_STOCK_LOCATION_ID).`
-      : 'No target location set yet. Tell me which location holds Koolmax stock; it will be set as SHEET_STOCK_LOCATION_ID.'}</p>`;
+  $('#sheet-payload-wrap').hidden = !isRun;
+  if (isRun) {
+    const p = r.payload || { batches: [] };
+    $('#sheet-payload').textContent = p.batches.length
+      ? `API version ${p.apiVersion || '(not set)'} · ${p.batches.length} call(s)\n\n${p.mutation}\n\n${p.batches.map(b => JSON.stringify(b, null, 2)).join('\n\n')}`
+      : 'Nothing to send: no SKU would change.';
+  }
+
+  if (!isRun) {
+    const locs = r.locations;
+    $('#sheet-locs').hidden = false;
+    $('#sheet-locs').innerHTML = `<b>Shopify locations</b> ` + (locs.ok
+      ? locs.locations.map(l => `<span class="tag" style="margin-right:6px">${esc(l.name)}${l.isActive ? '' : ' (inactive)'} · ${esc(l.id.split('/').pop())}</span>`).join('')
+      : `<span class="note err">${esc(locs.error)}</span>`) +
+      `<p class="hint" style="margin:8px 0 0">${r.targetLocation ? `Target location: <b>${esc(r.targetLocation.name || r.targetLocation.id)}</b>.` : 'No target location set (SHEET_STOCK_LOCATION_ID).'}</p>`;
+  } else $('#sheet-locs').hidden = true;
 
   const f = $('#sheet-filter').value;
-  const rows = r.items.filter(i => f === 'all' || (f === 'warn' ? i.warnings.length : i.status === f));
+  const items = r.items.filter(i => {
+    if (f === 'all') return true;
+    if (f === 'warn') return (i.warnings || []).length;
+    if (f === 'blocked') return isRun ? i.action === 'skip' : i.status === 'blocked';
+    if (f === 'set' || f === 'none') return isRun ? i.action === f : i.status === 'ready';
+    return true;
+  });
   $('#sheet-wrap').hidden = false;
   $('#sheet-csv').disabled = false;
-  $('#sheet-body').innerHTML = rows.map(i => {
-    const lab = i.labelCheck === 'ok' ? 'lab-ok' : i.labelCheck === 'moved' ? 'lab-moved' : 'lab-bad';
-    const notes = [...i.problems.map(p => `<li class="note err">${esc(p)}</li>`), ...i.warnings.map(w => `<li class="note warn">${esc(w)}</li>`),
-      i.note ? `<li class="note">${esc(i.note)}</li>` : ''].join('');
-    return `<tr>
+  $('#sheet-head').innerHTML = isRun
+    ? '<tr><th>Action</th><th>Shopify SKU</th><th>Sheet cell</th><th>Sheet value</th><th>Shopify on hand now</th><th>Would set on hand</th><th>Why</th><th>Problems and notes</th></tr>'
+    : '<tr><th>Status</th><th>Shopify SKU</th><th>Sheet cell</th><th>Label found in sheet</th><th>Sheet value</th><th>Would set on hand</th><th>Shopify now (on hand / available / committed)</th><th>Problems and notes</th></tr>';
+  const ACT = { set: 'Would update', none: 'No change', skip: 'Skipped' };
+  $('#sheet-body').innerHTML = items.map(i => isRun ? `<tr>
+      <td><span class="st ${i.action}">${ACT[i.action]}</span></td>
+      <td><div class="sku mono">${esc(i.sku)}</div>${i.product ? `<div class="note">${esc(i.product)}</div>` : ''}</td>
+      <td><b>${esc(i.cell)}</b><div class="note">${esc(i.labelFound || '')}</div></td>
+      <td class="mono">${blankCell(i.sheetValue)}</td>
+      <td>${i.onHand ?? '–'}${i.committed ? `<div class="note">${i.committed} committed</div>` : ''}</td>
+      <td><b>${i.action === 'set' ? i.qty : '–'}</b>${i.action === 'set' && i.onHand != null ? `<div class="note ${i.qty < i.onHand ? 'err' : ''}">${i.qty - i.onHand > 0 ? '+' : ''}${i.qty - i.onHand}</div>` : ''}</td>
+      <td class="note">${esc(i.reason)}</td>
+      <td>${notesList(i) || '<span class="hint">–</span>'}</td>
+    </tr>` : `<tr>
       <td><span class="st ${i.status}">${i.status === 'ready' ? 'Ready' : 'Blocked'}</span></td>
       <td><div class="sku mono">${esc(i.sku)}</div>${i.shopify ? `<div class="note">${esc(i.shopify.product)}</div>` : ''}<div class="tag">${esc(i.group)}</div></td>
       <td><b>${esc(i.cell)}</b>${i.movedTo ? `<div class="note warn">now at ${esc(i.movedTo)}?</div>` : ''}${i.sizeHeader ? `<div class="note">header ${esc(i.sizeHeader)}</div>` : ''}</td>
-      <td><div class="${lab}">${esc(i.labelFound || '(empty)')}</div><div class="note">expected: ${esc(i.source)}</div></td>
-      <td class="mono">${i.sheetValue === '' || i.sheetValue == null ? '<span class="hint">(blank)</span>' : esc(i.sheetValue)}</td>
-      <td><b>${i.proposedOnHand ?? '–'}</b>${i.change != null && i.change !== 0 ? `<div class="note">${i.change > 0 ? '+' : ''}${i.change} vs now</div>` : ''}</td>
+      <td><div class="${i.labelCheck === 'ok' ? 'lab-ok' : i.labelCheck === 'moved' ? 'lab-moved' : 'lab-bad'}">${esc(i.labelFound || '(empty)')}</div><div class="note">expected: ${esc(i.source)}</div></td>
+      <td class="mono">${blankCell(i.sheetValue)}</td>
+      <td><b>${i.proposedOnHand ?? '–'}</b></td>
       <td>${levelText(i.shopify?.levels, r.targetLocation)}</td>
-      <td>${notes ? `<ul>${notes}</ul>` : '<span class="hint">–</span>'}</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="8" class="hint">Nothing to show for this filter.</td></tr>';
+      <td>${notesList(i) || '<span class="hint">–</span>'}</td>
+    </tr>`).join('') || '<tr><td colspan="8" class="hint">Nothing to show for this filter.</td></tr>';
 }
 $('#sheet-csv').addEventListener('click', () => {
-  if (!sheetReport) return;
+  const r = sheetReport; if (!r) return;
   const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-  const head = ['status', 'shopify_sku', 'group', 'sheet_cell', 'used_cell', 'moved_to', 'label_found', 'expected_source', 'size_header', 'sheet_value', 'proposed_on_hand', 'shopify_product', 'locations (on_hand/available/committed)', 'problems', 'warnings'];
-  const lines = sheetReport.items.map(i => [i.status, i.sku, i.group, i.cell, i.usedCell, i.movedTo, i.labelFound, i.source, i.sizeHeader, i.sheetValue, i.proposedOnHand,
-    i.shopify?.product, (i.shopify?.levels || []).map(l => `${l.location}: ${l.on_hand}/${l.available}/${l.committed}`).join('; '), i.problems.join(' | '), i.warnings.join(' | ')].map(q).join(','));
-  const blob = new Blob(['﻿' + [head.map(q).join(','), ...lines].join('\r\n')], { type: 'text/csv' });
+  let head, lines;
+  if (r.kind === 'run') {
+    head = ['action', 'shopify_sku', 'group', 'sheet_cell', 'label_found', 'sheet_value', 'shopify_on_hand_now', 'committed', 'would_set_on_hand', 'reason', 'problems', 'warnings'];
+    lines = r.items.map(i => [i.action, i.sku, i.group, i.cell, i.labelFound, i.sheetValue, i.onHand, i.committed, i.action === 'set' ? i.qty : '', i.reason, (i.problems || []).join(' | '), (i.warnings || []).join(' | ')]);
+  } else {
+    head = ['status', 'shopify_sku', 'group', 'sheet_cell', 'used_cell', 'moved_to', 'label_found', 'expected_source', 'size_header', 'sheet_value', 'proposed_on_hand', 'shopify_product', 'locations (on_hand/available/committed)', 'problems', 'warnings'];
+    lines = r.items.map(i => [i.status, i.sku, i.group, i.cell, i.usedCell, i.movedTo, i.labelFound, i.source, i.sizeHeader, i.sheetValue, i.proposedOnHand,
+      i.shopify?.product, (i.shopify?.levels || []).map(l => `${l.location}: ${l.on_hand}/${l.available}/${l.committed}`).join('; '), i.problems.join(' | '), i.warnings.join(' | ')]);
+  }
+  const stamp = (r.startedAt || r.ranAt || '').slice(0, 16).replace(/[:T]/g, '-');
+  const blob = new Blob(['﻿' + [head.map(q).join(','), ...lines.map(l => l.map(q).join(','))].join('\r\n')], { type: 'text/csv' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `sheet-stock-validation-${sheetReport.ranAt.slice(0, 16).replace(/[:T]/g, '-')}.csv`;
+  a.download = `sheet-stock-${r.kind === 'run' ? 'dry-run' : 'validation'}-${stamp}.csv`;
   a.click(); URL.revokeObjectURL(a.href);
 });
 

@@ -1,15 +1,19 @@
 // sheet-stock.js
 // Google Sheet ("Main Sheet") -> Shopify stock for Koolmax's own products.
 //
-// PHASE 0: READ-ONLY VALIDATION. This file never writes to Shopify and never runs on a schedule.
-// It reads the live Main Sheet, checks every approved mapping (label, size header, value),
-// resolves each exact Shopify SKU to its variant, inventory item and locations, and reports
-// what WOULD be written. Writing comes in a later phase, only after approval.
+// PHASE 0 + 1: READ-ONLY. This file never writes to Shopify.
+//  - Validate: reads the live Main Sheet, checks every approved mapping (label, size header, value),
+//    resolves each exact Shopify SKU to its variant, inventory item and locations.
+//  - Dry run: plans exactly what a live sync would write (on_hand), keeps state and history,
+//    and can run on a schedule. Writing comes in Phase 2, only after approval.
 //
 // Railway variables:
 //   GOOGLE_SERVICE_ACCOUNT_JSON  service account key (the whole JSON, or base64 of it)
 //   GOOGLE_SHEET_ID              the Live Stock spreadsheet id
-//   SHEET_STOCK_LOCATION_ID      optional: Shopify location for Koolmax stock (gid://shopify/Location/...)
+//   SHEET_STOCK_LOCATION_ID      Shopify location for Koolmax stock (number or gid://shopify/Location/...)
+//   (Railway Volume)             attach one to the service; state and run history are kept there
+//   SHEET_SYNC_DISABLED=true     optional kill switch: the scheduler never runs
+//   SHEET_SYNC_MAX_CHANGES / SHEET_SYNC_MAX_TO_ZERO   optional mass-change guard limits (25 / 10)
 //
 // Mapping: sheet-stock-map.json (approved list; Shopify SKUs are exact, spaces kept).
 
@@ -348,24 +352,228 @@ async function validate() {
   };
 }
 
+// =====================================================================
+// PHASE 1: DRY RUN. Plans exactly what a live sync would write, keeps state
+// and history, can run on a schedule. Still NO Shopify writes: the sender is
+// not part of this phase.
+// =====================================================================
+
+// ---------- persistent state (Railway Volume) ----------
+// Railway sets RAILWAY_VOLUME_MOUNT_PATH when a volume is attached to the service.
+const DATA_DIR = process.env.SHEET_STOCK_DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(__dirname, 'data');
+const PERSISTENT = !!(process.env.SHEET_STOCK_DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH);
+const STATE_FILE = path.join(DATA_DIR, 'sheet-stock-state.json');
+const RUNS_FILE = path.join(DATA_DIR, 'sheet-stock-runs.json');
+const KEEP_RUNS = 40;
+const INTERVALS = [1, 2, 3, 4, 6, 12];          // hours
+// Mass-change guard: a normal day moves a handful of SKUs. If one run would change far more,
+// it is held for review (in live mode) instead of being written. Not applied to the first (baseline) run.
+const GUARD_MAX_CHANGES = parseInt(process.env.SHEET_SYNC_MAX_CHANGES, 10) || 25;
+const GUARD_MAX_TO_ZERO = parseInt(process.env.SHEET_SYNC_MAX_TO_ZERO, 10) || 10;
+
+function readJson(file, fallback) {
+  try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; }
+}
+function writeJson(file, data) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(data));
+  fs.renameSync(tmp, file);           // atomic: never leaves a half-written file
+}
+const state = Object.assign(
+  { settings: { enabled: false, intervalHours: 2, mode: 'dry' }, dry: { lastSeen: {} }, live: { lastApplied: {} }, lastRunAt: null, lastSuccessAt: null },
+  readJson(STATE_FILE, {}),
+);
+state.settings.mode = 'dry';           // Phase 1: dry only, whatever the file says
+let runs = readJson(RUNS_FILE, []);
+const saveState = () => writeJson(STATE_FILE, state);
+const saveRuns = () => writeJson(RUNS_FILE, runs.slice(0, KEEP_RUNS));
+
+// ---------- plan ----------
+// on_hand rules (approved): sheet = physical warehouse stock.
+//  - first run for a SKU: baseline, set on_hand = sheet (Shopify was stale)
+//  - sheet value unchanged since the last run: do nothing, so Shopify's own sales stay deducted
+//  - sheet value changed: set on_hand = new sheet value, guarded by changeFromQuantity
+function planItem(item, memory) {
+  const base = {
+    sku: item.sku, group: item.group, cell: item.usedCell || item.cell, labelFound: item.labelFound,
+    sheetValue: item.sheetValue, qty: item.proposedOnHand,
+    onHand: item.currentAtTarget?.on_hand ?? null, available: item.currentAtTarget?.available ?? null, committed: item.currentAtTarget?.committed ?? null,
+    product: item.shopify?.product || null, inventoryItemId: item.shopify?.inventoryItemId || null,
+    problems: item.problems, warnings: item.warnings,
+  };
+  if (item.status !== 'ready') return { ...base, action: 'skip', reason: item.problems.join(' ') || 'Not ready' };
+  const last = memory[item.sku];
+  let action, reason;
+  if (!last) { action = 'set'; reason = 'First run: baseline, sheet value applied once'; }
+  else if (last.value === item.proposedOnHand) { action = 'none'; reason = `Sheet unchanged since ${new Date(last.at).toLocaleString('en-GB', { timeZone: 'Europe/London' })}; Shopify sales kept`; }
+  else { action = 'set'; reason = `Sheet changed ${last.value} → ${item.proposedOnHand}`; }
+  if (action === 'set' && base.onHand === item.proposedOnHand) { action = 'none'; reason += ' (Shopify already matches)'; }
+  return { ...base, action, reason, baseline: !last, toZero: action === 'set' && item.proposedOnHand === 0 && (base.onHand ?? 0) > 0 };
+}
+
+// The exact Shopify call a live run would make (shown in the dry run, not sent)
+const apiVersion = () => process.env.SHOPIFY_API_VERSION || '';
+const SET_MUTATION = `mutation inventorySetQuantities($input: InventorySetQuantitiesInput!, $idempotencyKey: String!) {
+  inventorySetQuantities(input: $input) @idempotent(key: $idempotencyKey) {
+    inventoryAdjustmentGroup { reason referenceDocumentUri changes { name delta quantityAfterChange } }
+    userErrors { code field message }
+  }
+}`;
+function buildPayload(runId, plan, locationId) {
+  const sets = plan.filter(p => p.action === 'set');
+  const batches = [];
+  for (let i = 0; i < sets.length; i += 50) {
+    batches.push({
+      idempotencyKey: `sheet-${runId}-${i / 50}`,
+      input: {
+        name: 'on_hand',
+        reason: 'correction',
+        referenceDocumentUri: `gid://koolmax-sheet-sync/SyncRun/${runId}`,
+        quantities: sets.slice(i, i + 50).map(p => ({
+          inventoryItemId: p.inventoryItemId, locationId, quantity: p.qty,
+          changeFromQuantity: p.onHand,      // fails safely if Shopify changed in the meantime
+        })),
+      },
+    });
+  }
+  return { mutation: SET_MUTATION, apiVersion: apiVersion(), batches };
+}
+
+// ---------- run ----------
+let running = null;           // one job at a time (validate or sync)
+async function exclusive(fn) {
+  if (running) { const e = new Error(`Busy: a ${running} is already running, try again in a moment`); e.status = 409; throw e; }
+  running = fn.name || 'job';
+  try { return await fn(); } finally { running = null; }
+}
+
+async function runSync({ trigger = 'manual' } = {}) {
+  const mode = 'dry';                                   // Phase 1
+  const id = Date.now().toString(36);
+  const started = new Date();
+  const run = { id, mode, trigger, startedAt: started.toISOString(), finishedAt: null, result: 'running', message: '', summary: null, guard: null, items: [], payload: null };
+  state.lastRunAt = started.toISOString();
+  try {
+    const report = await validate();
+    run.targetLocation = report.targetLocation;
+    if (!report.targetLocation) throw new Error('SHEET_STOCK_LOCATION_ID is not set');
+    if (report.layoutAlarm) throw new Error(`Stopped: ${report.layoutAlarm}`);
+
+    const memory = mode === 'dry' ? state.dry.lastSeen : state.live.lastApplied;
+    const plan = report.items.map(i => planItem(i, memory));
+    const sets = plan.filter(p => p.action === 'set');
+    const nonBaseline = sets.filter(p => !p.baseline);
+    const toZero = nonBaseline.filter(p => p.toZero);
+    if (nonBaseline.length > GUARD_MAX_CHANGES || toZero.length > GUARD_MAX_TO_ZERO) {
+      run.guard = `Unusual run: ${nonBaseline.length} SKUs changed${toZero.length ? `, ${toZero.length} would drop to 0` : ''} (limits ${GUARD_MAX_CHANGES} / ${GUARD_MAX_TO_ZERO}). A live run would hold these for your approval.`;
+    }
+    run.items = plan;
+    run.payload = buildPayload(id, plan, report.targetLocation.id);
+    run.summary = {
+      total: plan.length,
+      set: sets.length,
+      baseline: sets.filter(p => p.baseline).length,
+      changed: nonBaseline.length,
+      none: plan.filter(p => p.action === 'none').length,
+      skip: plan.filter(p => p.action === 'skip').length,
+      toZero: sets.filter(p => p.qty === 0 && (p.onHand ?? 0) > 0).length,
+      onHandBefore: plan.reduce((a, p) => a + (p.onHand ?? 0), 0),
+      onHandAfter: plan.reduce((a, p) => a + (p.action === 'set' ? p.qty : (p.onHand ?? 0)), 0),
+    };
+    // Dry memory = what the sheet showed this run, so the next dry run shows only real sheet changes
+    const now = new Date().toISOString();
+    for (const p of plan) if (p.qty != null && p.action !== 'skip') memory[p.sku] = { value: p.qty, at: now };
+    run.result = 'ok';
+    run.message = `Dry run: would set ${sets.length} (${run.summary.baseline} baseline, ${nonBaseline.length} sheet changes), ${run.summary.none} unchanged, ${run.summary.skip} skipped. Nothing written.`;
+    state.lastSuccessAt = now;
+  } catch (e) {
+    run.result = 'failed';
+    run.message = e.message;
+  }
+  run.finishedAt = new Date().toISOString();
+  run.tookMs = Date.now() - started;
+  runs.unshift(run);
+  runs = runs.slice(0, KEEP_RUNS);
+  try { saveState(); saveRuns(); } catch (e) { console.log('[sheet-stock] could not save state:', e.message); }
+  console.log(`[sheet-stock] ${run.trigger} ${run.mode} run ${run.result}: ${run.message}`);
+  return run;
+}
+
+// ---------- scheduler (dry only in Phase 1) ----------
+function nextRunAt() {
+  if (!state.settings.enabled || process.env.SHEET_SYNC_DISABLED === 'true') return null;
+  const last = state.lastRunAt ? Date.parse(state.lastRunAt) : 0;
+  return new Date(Math.max(Date.now(), last + state.settings.intervalHours * 3600e3)).toISOString();
+}
+let schedulerStarted = false;
+function startScheduler() {
+  if (schedulerStarted) return;
+  schedulerStarted = true;
+  setInterval(() => {
+    const due = nextRunAt();
+    if (!due || running || Date.parse(due) > Date.now()) return;
+    exclusive(function scheduledSync() { return runSync({ trigger: 'schedule' }); }).catch(e => console.log('[sheet-stock] scheduled run skipped:', e.message));
+  }, 60 * 1000).unref();
+}
+
+const runSummary = r => ({ id: r.id, mode: r.mode, trigger: r.trigger, startedAt: r.startedAt, result: r.result, message: r.message, summary: r.summary, guard: r.guard, tookMs: r.tookMs });
+
 // ---------- routes (mounted inside the password-protected /admin/api) ----------
 function createRouter() {
   const router = express.Router();
-  let running = null;
   let last = null;
+  startScheduler();
 
   router.get('/api/sheet-stock/config', (req, res) => res.json({ tab: TAB, range: RANGE, quantityTarget: CONFIG.quantityTarget, mappings: CONFIG.mappings }));
 
   router.post('/api/sheet-stock/validate', async (req, res) => {
-    if (running) return res.status(409).json({ error: 'A validation is already running, try again in a moment' });
-    running = validate();
-    try { last = await running; res.json(last); }
-    catch (e) { res.status(500).json({ error: e.message }); }
-    finally { running = null; }
+    try { last = await exclusive(function validation() { return validate(); }); res.json(last); }
+    catch (e) { res.status(e.status || 500).json({ error: e.message }); }
+  });
+  router.get('/api/sheet-stock/last', (req, res) => res.json({ report: last }));
+
+  router.post('/api/sheet-stock/dry-run', async (req, res) => {
+    try { res.json(await exclusive(function dryRun() { return runSync({ trigger: 'manual' }); })); }
+    catch (e) { res.status(e.status || 500).json({ error: e.message }); }
   });
 
-  router.get('/api/sheet-stock/last', (req, res) => res.json({ report: last }));
+  router.get('/api/sheet-stock/status', (req, res) => res.json({
+    phase: 1, mode: 'dry', settings: state.settings, intervals: INTERVALS,
+    disabledByEnv: process.env.SHEET_SYNC_DISABLED === 'true',
+    persistent: PERSISTENT, dataDir: DATA_DIR,
+    running, lastRunAt: state.lastRunAt, lastSuccessAt: state.lastSuccessAt, nextRunAt: nextRunAt(),
+    guard: { maxChanges: GUARD_MAX_CHANGES, maxToZero: GUARD_MAX_TO_ZERO },
+    runs: runs.map(runSummary),
+    latest: runs[0] || null,
+  }));
+
+  router.get('/api/sheet-stock/runs/:id', (req, res) => {
+    const r = runs.find(x => x.id === req.params.id);
+    if (!r) return res.status(404).json({ error: 'Run not found' });
+    res.json(r);
+  });
+
+  router.post('/api/sheet-stock/settings', (req, res) => {
+    const { enabled, intervalHours } = req.body || {};
+    if (enabled !== undefined) state.settings.enabled = !!enabled;
+    if (intervalHours !== undefined) {
+      const h = Number(intervalHours);
+      if (!INTERVALS.includes(h)) return res.status(400).json({ error: `Interval must be one of ${INTERVALS.join(', ')} hours` });
+      state.settings.intervalHours = h;
+    }
+    try { saveState(); } catch (e) { return res.status(500).json({ error: 'Could not save settings: ' + e.message }); }
+    res.json({ settings: state.settings, nextRunAt: nextRunAt() });
+  });
+
+  // Start the dry-run memory again (next dry run is a baseline). Live memory is never touched here.
+  router.post('/api/sheet-stock/reset-dry', (req, res) => {
+    state.dry.lastSeen = {};
+    try { saveState(); } catch (e) {}
+    res.json({ ok: true });
+  });
+
   return router;
 }
 
-module.exports = { createRouter, validate, parseQty, labelMatches, checkSheet, sizeValue };
+module.exports = { createRouter, validate, runSync, planItem, buildPayload, parseQty, labelMatches, checkSheet, sizeValue };
