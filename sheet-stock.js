@@ -80,10 +80,12 @@ async function readMainSheet() {
   const meta = await sheetsGet('?fields=properties.title,sheets.properties(sheetId,title,index)');
   const tabs = (meta.sheets || []).map(s => s.properties).sort((a, b) => a.index - b.index);
   const first = tabs[0];
-  if (!first || first.title !== TAB) {
+  // Compare ignoring case and extra spaces (the live tab is called "Main Sheet " with a trailing space)
+  const loose = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  if (!first || loose(first.title) !== loose(TAB)) {
     throw new Error(`Stopped: the first tab is "${first?.title || 'none'}", expected "${TAB}". Nothing was read.`);
   }
-  const range = `'${TAB.replace(/'/g, "''")}'!${RANGE}`;
+  const range = `'${first.title.replace(/'/g, "''")}'!${RANGE}`;   // exact live tab name, spaces kept
   const data = await sheetsGet(`/values/${encodeURIComponent(range)}?valueRenderOption=UNFORMATTED_VALUE&dateTimeRenderOption=FORMATTED_STRING&majorDimension=ROWS`);
   return { title: meta.properties?.title, tab: { title: first.title, gid: first.sheetId }, tabs: tabs.map(t => t.title), rows: data.values || [] };
 }
