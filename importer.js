@@ -505,6 +505,10 @@ function createImporter({ skuGroup = {} } = {}) {
     next();
   });
 
+  // Google Sheet stock (Phase 0: read-only validation). If the file is missing, the dashboard still works.
+  const sheetStock = optionalRequire('./sheet-stock', null);
+  if (sheetStock) router.use(sheetStock.createRouter({ skuGroup }));
+
   const parseSkus = list => [...new Set((list || []).map(s => String(s).trim()).filter(Boolean))];
 
   router.post('/api/preview', async (req, res) => {

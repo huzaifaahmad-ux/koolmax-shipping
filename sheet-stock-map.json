@@ -1,0 +1,1210 @@
+{
+  "_readme": "Approved Main Sheet -> Shopify SKU mapping. Shopify SKUs are exact (spaces kept). Edit only after review.",
+  "sheetTab": "Main Sheet",
+  "readRange": "A1:J300",
+  "quantityTarget": "on_hand",
+  "mappings": [
+    {
+      "sku": "KMC200G",
+      "group": "approved-49",
+      "cell": "H173",
+      "source": "KMC-200G UNDER COUNTER",
+      "match": [
+        "KMC-200G"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC200",
+      "group": "approved-49",
+      "cell": "H171",
+      "source": "KMC-200 UNDER COUNTER",
+      "match": [
+        "KMC-200"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC200S",
+      "group": "approved-49",
+      "cell": "H172",
+      "source": "KMC-200S UNDER COUNTER",
+      "match": [
+        "KMC-200S"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC400",
+      "group": "approved-49",
+      "cell": "H67",
+      "source": "KMC-400 SINGLE DR CHILLER",
+      "match": [
+        "KMC-400"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC400S",
+      "group": "approved-49",
+      "cell": "H69",
+      "source": "KMC-400S SINGLE SOLID DR CHILLER",
+      "match": [
+        "KMC-400S"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC600",
+      "group": "approved-49",
+      "cell": "H70",
+      "source": "KMC-600 SINGLE SOLID DR CHILLER",
+      "match": [
+        "KMC-600"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC600S",
+      "group": "approved-49",
+      "cell": "H71",
+      "source": "KMC-600S SINGLE SOLID DR CHILLER",
+      "match": [
+        "KMC-600S"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC1SS",
+      "group": "approved-49",
+      "cell": "D66",
+      "source": "KMC-1SS S/D UPRIGHT",
+      "match": [
+        "KMC-1SS"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC2SS",
+      "group": "approved-49",
+      "cell": "D67",
+      "source": "KMC-2SS D/D UPRIGHT",
+      "match": [
+        "KMC-2SS"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC2DS",
+      "group": "approved-49",
+      "cell": "D127",
+      "source": "KMC-2DS-1.4M",
+      "match": [
+        "KMC-2DS-1.4M"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC 3DS",
+      "group": "approved-49",
+      "cell": "D128",
+      "source": "KMC-3DS-1.8M",
+      "match": [
+        "KMC-3DS-1.8M"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC 4DS",
+      "group": "approved-49",
+      "cell": "D130",
+      "source": "KMC-4DS-2.3M",
+      "match": [
+        "KMC-4DS-2.3M"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC902",
+      "group": "approved-49",
+      "cell": "D131",
+      "source": "KMC-902",
+      "match": [
+        "KMC-902"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC903",
+      "group": "approved-49",
+      "cell": "D132",
+      "source": "KMC-903-1.4M",
+      "match": [
+        "KMC-903-1.4M"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF200G",
+      "group": "approved-49",
+      "cell": "D178",
+      "source": "KMF-200G UNDER COUNTER",
+      "match": [
+        "KMF-200G"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF200",
+      "group": "approved-49",
+      "cell": "D176",
+      "source": "KMF-200 UNDER COUNTER",
+      "match": [
+        "KMF-200"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF400",
+      "group": "approved-49",
+      "cell": "H99",
+      "source": "KMF-400 SINGLE SOLID DR FREEZER",
+      "match": [
+        "KMF-400"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF400S",
+      "group": "approved-49",
+      "cell": "H101",
+      "source": "KMF-400S SINGLE SOLID DR FREEZER",
+      "match": [
+        "KMF-400S"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF600",
+      "group": "approved-49",
+      "cell": "H103",
+      "source": "KMF-600 SINGLE SOLID DR FREEZER",
+      "match": [
+        "KMF-600"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF600S",
+      "group": "approved-49",
+      "cell": "H104",
+      "source": "KMF-600S SINGLE SOLID DR FREEZER",
+      "match": [
+        "KMF-600S"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF500IC",
+      "group": "approved-49",
+      "cell": "H116",
+      "source": "KMF-500IC-1.9M GLASS LID",
+      "match": [
+        "KMF-500IC-1.9M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF400IC",
+      "group": "approved-49",
+      "cell": "H115",
+      "source": "KMF-400IC-1.6M GLASS LID",
+      "match": [
+        "KMF-400IC-1.6M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF300IC",
+      "group": "approved-49",
+      "cell": "H114",
+      "source": "KMF-300IC-1.3M GLASS LID",
+      "match": [
+        "KMF-300IC-1.3M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF200IC",
+      "group": "approved-49",
+      "cell": "H113",
+      "source": "KMF-200IC-1.0M GLASS LID",
+      "match": [
+        "KMF-200IC-1.0M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF1SS",
+      "group": "approved-49",
+      "cell": "H97",
+      "source": "KMF-1SS S/D UPRIGHT",
+      "match": [
+        "KMF-1SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF2SS",
+      "group": "approved-49",
+      "cell": "H98",
+      "source": "KMF-2SS D/D UPRIGHT",
+      "match": [
+        "KMF-2SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF 2DS",
+      "group": "approved-49",
+      "cell": "H126",
+      "source": "KMF-2DS-1.4M",
+      "match": [
+        "KMF-2DS-1.4M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF 3DS",
+      "group": "approved-49",
+      "cell": "H127",
+      "source": "KMF-3DS-1.8M",
+      "match": [
+        "KMF-3DS-1.8M"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMBC2H",
+      "group": "approved-49",
+      "cell": "D172",
+      "source": "KMBC-2H",
+      "match": [
+        "KMBC-2H"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMBC3H",
+      "group": "approved-49",
+      "cell": "D173",
+      "source": "KMBC-3H",
+      "match": [
+        "KMBC-3H"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMBC2SL",
+      "group": "approved-49",
+      "cell": "D174",
+      "source": "KMBC-2SL",
+      "match": [
+        "KMBC-2SL"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMBC3SL",
+      "group": "approved-49",
+      "cell": "D175",
+      "source": "KMBC-3SL",
+      "match": [
+        "KMBC-3SL"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMBC1",
+      "group": "approved-49",
+      "cell": "D171",
+      "source": "KMBC-1",
+      "match": [
+        "KMBC-1"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC2EN",
+      "group": "approved-49",
+      "cell": "D126",
+      "source": "KMC-2EN",
+      "match": [
+        "KMC-2EN"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC3EN",
+      "group": "approved-49",
+      "cell": "D129",
+      "source": "KMC-3EN-1.4M",
+      "match": [
+        "KMC-3EN-1.4M"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC400G",
+      "group": "approved-49",
+      "cell": "H68",
+      "source": "KMC-400G SINGLE DR CHILLER",
+      "match": [
+        "KMC-400G"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMF200S",
+      "group": "approved-49",
+      "cell": "D177",
+      "source": "KMF-200S UNDER COUNTER",
+      "match": [
+        "KMF-200S"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMCF230W",
+      "group": "chest-freezer",
+      "cell": "H109",
+      "source": "KMF-230W",
+      "match": [
+        "KMF-230W"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF370W",
+      "group": "chest-freezer",
+      "cell": "H110",
+      "source": "KMF-370W",
+      "match": [
+        "KMF-370W"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF550W",
+      "group": "chest-freezer",
+      "cell": "H111",
+      "source": "KMF-550W",
+      "match": [
+        "KMF-550W"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF650W",
+      "group": "chest-freezer",
+      "cell": "H112",
+      "source": "KMF-650W",
+      "match": [
+        "KMF-650W"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF230S",
+      "group": "chest-freezer",
+      "cell": "H117",
+      "source": "KMF-230-SS",
+      "match": [
+        "KMF-230-SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF550S",
+      "group": "chest-freezer",
+      "cell": "H119",
+      "source": "KMF-550-SS",
+      "match": [
+        "KMF-550-SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF370S",
+      "group": "chest-freezer",
+      "cell": "H118",
+      "source": "KMF-370-SS",
+      "match": [
+        "KMF-370-SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMCF650S",
+      "group": "chest-freezer",
+      "cell": "H120",
+      "source": "KMF-650-SS",
+      "match": [
+        "KMF-650-SS"
+      ],
+      "labelCols": [
+        "E",
+        "F",
+        "G"
+      ]
+    },
+    {
+      "sku": "KMC700G GREY",
+      "group": "upright-chiller",
+      "cell": "D63",
+      "source": "KMC-700 SILVER",
+      "match": [
+        "KMC-700",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC700G BLACK",
+      "group": "upright-chiller",
+      "cell": "D62",
+      "source": "KMC-700 BLACK",
+      "match": [
+        "KMC-700",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC1300G GREY",
+      "group": "upright-chiller",
+      "cell": "D65",
+      "source": "KMC-1300 SILVER",
+      "match": [
+        "KMC-1300",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC1300G BLACK",
+      "group": "upright-chiller",
+      "cell": "D64",
+      "source": "KMC-1300 BLACK",
+      "match": [
+        "KMC-1300",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC2000G GREY",
+      "group": "upright-chiller",
+      "cell": "D70",
+      "source": "KMC-2000 SILVER / MAXIMA 3 DOOR",
+      "match": [
+        "KMC-2000",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC2000G BLACK",
+      "group": "upright-chiller",
+      "cell": "D56",
+      "source": "KMC-2000 BLACK / MAXIMA 3 DOOR",
+      "match": [
+        "KMC-2000",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC3000G GREY",
+      "group": "upright-chiller",
+      "cell": "D68",
+      "source": "KMC-3000 SILVER / 4 DOOR",
+      "match": [
+        "KMC-3000",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMC3000G BLACK",
+      "group": "upright-chiller",
+      "cell": "D71",
+      "source": "KMC-3000 BLACK / MAXIMA 4 DOOR",
+      "match": [
+        "KMC-3000",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF700 GREY",
+      "group": "upright-freezer",
+      "cell": "D82",
+      "source": "KMF-700 SILVER",
+      "match": [
+        "KMF-700",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF700",
+      "group": "upright-freezer",
+      "cell": "D83",
+      "source": "KMF-700 BLACK",
+      "match": [
+        "KMF-700",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF1300",
+      "group": "upright-freezer",
+      "cell": "D91",
+      "source": "KMF-13 (the colour that is not BLACK)",
+      "match": [
+        "KMF-13"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "exclude": [
+        "BLACK"
+      ],
+      "note": "No colour in SKU = the other colour (row D91), per client"
+    },
+    {
+      "sku": "KMF1300 BLACK",
+      "group": "upright-freezer",
+      "cell": "D92",
+      "source": "KMF-13 BLACK",
+      "match": [
+        "KMF-13",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF2000",
+      "group": "upright-freezer",
+      "cell": "D94",
+      "source": "KMF-2000 BLACK",
+      "match": [
+        "KMF-2000",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF2000 GREY",
+      "group": "upright-freezer",
+      "cell": "D93",
+      "source": "KMF-2000 SILVER",
+      "match": [
+        "KMF-2000",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF3000",
+      "group": "upright-freezer",
+      "cell": "D96",
+      "source": "KMF-3000 BLACK",
+      "match": [
+        "KMF-3000",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "KMF3000 GREY",
+      "group": "upright-freezer",
+      "cell": "D95",
+      "source": "KMF-3000 SILVER",
+      "match": [
+        "KMF-3000",
+        "SILVER"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ]
+    },
+    {
+      "sku": "FRIGUS 2500 OPEN BLACK",
+      "group": "multideck",
+      "cell": "G39",
+      "source": "FRIGUS INTEGRAL OPEN BLACK / 2.5m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m"
+    },
+    {
+      "sku": "FRIGUS 1875 OPEN BLACK",
+      "group": "multideck",
+      "cell": "F39",
+      "source": "FRIGUS INTEGRAL OPEN BLACK / 1.875m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m"
+    },
+    {
+      "sku": "FRIGUS 1250 OPEN BLACK",
+      "group": "multideck",
+      "cell": "E39",
+      "source": "FRIGUS INTEGRAL OPEN BLACK / 1.25m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m"
+    },
+    {
+      "sku": "FRIGUS 2500 OPEN WHITE",
+      "group": "multideck",
+      "cell": "G40",
+      "source": "FRIGUS INTEGRAL OPEN WHITE / 2.5m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m"
+    },
+    {
+      "sku": "FRIGUS 1875 OPEN WHITE",
+      "group": "multideck",
+      "cell": "F40",
+      "source": "FRIGUS INTEGRAL OPEN WHITE / 1.875m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m"
+    },
+    {
+      "sku": "FRIGUS 1250 OPEN WHITE",
+      "group": "multideck",
+      "cell": "E40",
+      "source": "FRIGUS INTEGRAL OPEN WHITE / 1.25m",
+      "match": [
+        "FRIGUS",
+        "OPEN",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m"
+    },
+    {
+      "sku": "OASIS 2500 FGD BLACK",
+      "group": "multideck",
+      "cell": "G37",
+      "source": "OASIS INTEGRALS BLACK WITH DOOR / 2.5m",
+      "match": [
+        "OASIS",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m"
+    },
+    {
+      "sku": "OASIS 2500 FGD WHITE",
+      "group": "multideck",
+      "cell": "G38",
+      "source": "OASIS INTEGRALS WHITE WITH DOORS / 2.5m",
+      "match": [
+        "OASIS",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m"
+    },
+    {
+      "sku": "OASIS 1875 FGD BLACK",
+      "group": "multideck",
+      "cell": "F37",
+      "source": "OASIS INTEGRALS BLACK WITH DOOR / 1.875m",
+      "match": [
+        "OASIS",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m"
+    },
+    {
+      "sku": "OASIS 1875 FGD WHITE",
+      "group": "multideck",
+      "cell": "F38",
+      "source": "OASIS INTEGRALS WHITE WITH DOORS / 1.875m",
+      "match": [
+        "OASIS",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m"
+    },
+    {
+      "sku": "OASIS 1250 FGD WHITE",
+      "group": "multideck",
+      "cell": "E38",
+      "source": "OASIS INTEGRALS WHITE WITH DOORS / 1.25m",
+      "match": [
+        "OASIS",
+        "WHITE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m"
+    },
+    {
+      "sku": "OASIS 1250  FGD BLACK",
+      "group": "multideck",
+      "cell": "E37",
+      "source": "OASIS INTEGRALS BLACK WITH DOOR / 1.25m",
+      "match": [
+        "OASIS",
+        "BLACK"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m"
+    },
+    {
+      "sku": "Koolmax NICE 1250",
+      "group": "nice",
+      "cell": "E32",
+      "source": "NICE Normal Stock / 1.25m",
+      "match": [
+        "NICE"
+      ],
+      "exclude": [
+        "BULK",
+        "DAILY"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m",
+      "note": "Normal Stock row only (row 32); Bulk/M-DAILY row 33 ignored, per client"
+    },
+    {
+      "sku": "Koolmax NICE 1875",
+      "group": "nice",
+      "cell": "F32",
+      "source": "NICE Normal Stock / 1.875m",
+      "match": [
+        "NICE"
+      ],
+      "exclude": [
+        "BULK",
+        "DAILY"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m",
+      "note": "Normal Stock row only (row 32); Bulk/M-DAILY row 33 ignored, per client"
+    },
+    {
+      "sku": "Koolmax NICE 2500",
+      "group": "nice",
+      "cell": "G32",
+      "source": "NICE Normal Stock / 2.5m",
+      "match": [
+        "NICE"
+      ],
+      "exclude": [
+        "BULK",
+        "DAILY"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m",
+      "note": "Normal Stock row only (row 32); Bulk/M-DAILY row 33 ignored, per client"
+    },
+    {
+      "sku": "Koolmax NICE 1000",
+      "group": "nice",
+      "cell": "D32",
+      "source": "NICE Normal Stock / 1m",
+      "match": [
+        "NICE"
+      ],
+      "exclude": [
+        "BULK",
+        "DAILY"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1m",
+      "note": "Normal Stock row only (row 32); Bulk/M-DAILY row 33 ignored, per client"
+    },
+    {
+      "sku": "VIANDE 1250",
+      "group": "viande",
+      "cell": "E36",
+      "source": "VIANDE SERVE OVERS Black (MISC) / 1.25m",
+      "match": [
+        "VIANDE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.25m",
+      "uniqueInSheet": true,
+      "note": "Black assumed (Shopify SKU has no colour). Skipped if the sheet has more than one VIANDE row."
+    },
+    {
+      "sku": "VIANDE 1875",
+      "group": "viande",
+      "cell": "F36",
+      "source": "VIANDE SERVE OVERS Black (MISC) / 1.875m",
+      "match": [
+        "VIANDE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "1.875m",
+      "uniqueInSheet": true,
+      "note": "Black assumed (Shopify SKU has no colour). Skipped if the sheet has more than one VIANDE row."
+    },
+    {
+      "sku": "VIANDE 2500",
+      "group": "viande",
+      "cell": "G36",
+      "source": "VIANDE SERVE OVERS Black (MISC) / 2.5m",
+      "match": [
+        "VIANDE"
+      ],
+      "labelCols": [
+        "A",
+        "B",
+        "C"
+      ],
+      "size": "2.5m",
+      "uniqueInSheet": true,
+      "note": "Black assumed (Shopify SKU has no colour). Skipped if the sheet has more than one VIANDE row."
+    }
+  ]
+}
